@@ -104,7 +104,7 @@ pub fn main() {
     let opt = Opt::parse();
 
 
-    let corpus_dirs: Vec<PathBuf> = vec![PathBuf::from("/home/john/quic-fuzz/LibAFL/fuzzers/my_fuzzers/nyx_quic_fuzz/corpus-nor/")];
+    let corpus_dirs: Vec<PathBuf> = vec![PathBuf::from("corpus-nor/")];
 
     let first_path = format!("{start_dir}/{0}/", opt.first_name);
     let second_path = format!("{start_dir}/{0}/", opt.second_name);

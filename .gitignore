@@ -85,10 +85,10 @@ record.pcap
 corpus*
 *.txt
 *.core
-vendors/
+vendors/*
 slog
 *.bak
-*.cur
+*.crt
 *.key
 *.pcap
 *corpus

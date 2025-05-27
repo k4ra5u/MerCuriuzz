@@ -185,8 +185,8 @@ static mut SHMEM_OB_RESPONSE_FIRST: Option<UnixShMem> = None;
 static mut SHMEM_OB_RESPONSE_SECOND: Option<UnixShMem> = None;
 
 const keylog_file: &str = "/media/john/Data/key.log";
-const start_dir: &str = "/home/john/quic-fuzz/LibAFL/fuzzers/my_fuzzers/start";
-const judge_dir: &str = "/home/john/quic-fuzz/LibAFL/fuzzers/my_fuzzers/judge";
+const start_dir: &str = "start";
+const judge_dir: &str = "judge";
 
 pub fn main() {
     std::env::set_var("RUST_LOG", "info");
@@ -241,7 +241,7 @@ pub fn main() {
     );
 
 
-    let corpus_dirs: Vec<PathBuf> = vec![PathBuf::from("/home/john/quic-fuzz/LibAFL/fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/corpus-nor/")];
+    let corpus_dirs: Vec<PathBuf> = vec![PathBuf::from("corpus-nor/")];
 
 
 

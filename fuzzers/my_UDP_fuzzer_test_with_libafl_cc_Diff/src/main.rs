@@ -165,8 +165,8 @@ static mut SHMEM_EDGE_MAP_FIRST: Option<UnixShMem> = None;
 static mut SHMEM_EDGE_MAP_SECOND: Option<UnixShMem> = None;
 pub fn main() {
     std::env::set_var("RUST_LOG", "warn");
-    std::env::set_var("START_DIR", "/home/john/quic-fuzz/LibAFL/fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/start");
-    std::env::set_var("JUDGE_DIR", "/home/john/quic-fuzz/LibAFL/fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/judge");
+    std::env::set_var("START_DIR", "start");
+    std::env::set_var("JUDGE_DIR", "judge");
     std::env::set_var("SSLKEYLOGFILE", "/media/john/Data/key.log");
     std::env::set_var("PCAPS_DIR", "pcaps");
     env_logger::init();
@@ -196,7 +196,7 @@ pub fn main() {
     // let mut first_harness = start_harness(&opt.first_name,unsafe {SHMEM_EDGE_MAP_FIRST.as_ref().unwrap().id().to_string()});
     // let mut second_harness = start_harness(&opt.second_name,unsafe {SHMEM_EDGE_MAP_SECOND.as_ref().unwrap().id().to_string()});
 
-    let corpus_dirs: Vec<PathBuf> = vec![PathBuf::from("/home/john/quic-fuzz/LibAFL/fuzzers/my_fuzzers/network_quic_fuzz/corpus-nor/")];
+    let corpus_dirs: Vec<PathBuf> = vec![PathBuf::from("corpus-nor/")];
 
 
 

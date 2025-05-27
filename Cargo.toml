@@ -37,6 +37,17 @@ exclude = [
     "vendors/packer",
     "vendors/QEMU-Nyx",
     "vendors/LibAFL",
+    "vendors/LibAFL/bindings",
+    "vendors/LibAFL/fuzzers",
+    "vendors/LibAFL/libafl_qemu/libafl_qemu_build",
+    "vendors/LibAFL/libafl_qemu/libafl_qemu_sys",
+    "vendors/LibAFL/utils/noaslr",
+    "vendors/LibAFL/utils/gdb_qemu",
+    "vendors/LibAFL/utils/libafl_fmt",
+    "vendors/LibAFL/utils/desyscall",
+    "vendors/LibAFL/utils/multi_machine_generator",
+    "vendors/LibAFL/scripts",
+    "vendors",
 
 ]
 

@@ -136,8 +136,8 @@ static mut SHMEM_QUIC_STRUCT_SECOND: Option<UnixShMem> = None;
 
 fn main() {
     std::env::set_var("RUST_LOG", "info");
-    std::env::set_var("START_DIR", "/home/john/quic-fuzz/LibAFL/fuzzers/my_fuzzers/dpifuzz_test/start");
-    std::env::set_var("JUDGE_DIR", "/home/john/quic-fuzz/LibAFL/fuzzers/my_fuzzers/dpifuzz_test/judge");
+    std::env::set_var("START_DIR", "start");
+    std::env::set_var("JUDGE_DIR", "judge");
     std::env::set_var("SSLKEYLOGFILE", "/media/john/Data/key.log");
     std::env::set_var("PCAPS_DIR", "pcaps");
     env_logger::init();
