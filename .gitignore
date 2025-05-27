@@ -86,3 +86,9 @@ corpus*
 *.txt
 *.core
 vendors/
+slog
+*.bak
+*.cur
+*.key
+*.pcap
+*corpus

@@ -1,0 +1,1 @@
+nohup taskset -c 74,75 /home/john/quic-fuzz/newest/msquic/artifacts/bin/linux/x64_Debug_openssl3/quicsample -server -cert_file:/home/john/quic-fuzz/certs/server.crt -key_file:/home/john/quic-fuzz/certs/server.key >> msquic.txt 2>&1 &

@@ -1,0 +1,1 @@
+nohup taskset -c 52,53 /home/john/quic-fuzz/newest/neqo/target/debug/neqo-server -d /home/john/quic-fuzz/newest/neqo/test-fixture/db 0.0.0.0:58440 >> neqo.txt  2>&1 & 

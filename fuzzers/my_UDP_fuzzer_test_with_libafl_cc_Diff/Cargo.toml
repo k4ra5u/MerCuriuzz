@@ -1,0 +1,39 @@
+[package]
+name = "my_UDP_fuzzer_test_with_libafl_cc_Diff"
+version = "0.8.2"
+authors = ["ergrelet <ergrelet@users.noreply.github.com>"]
+edition = "2021"
+
+[features]
+default = ["std"]
+std = []
+# Forces a crash
+crash = []
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+debug = true
+
+[build-dependencies]
+cc = { version = "1.0", features = ["parallel"] }
+which = { version = "6.0" }
+
+[dependencies]
+clap = { version = "4.0", features = ["derive"] }
+nix = { version = "0.29", features = ["signal"] }
+libafl = { path = "../../vendors/LibAFL/libafl/" }
+libafl_bolts = { path = "../../vendors/LibAFL/libafl_bolts/" }
+libafl_cc = { path = "../../vendors/LibAFL/libafl_cc/" }
+libafl_targets = { path = "../../vendors/LibAFL/libafl_targets/", features = ["sancov_pcguard_hitcounts", "libfuzzer", "pointer_maps"] }
+log = "0.4.21"
+env_logger = "0.11"
+mylibafl = { path = "../../libafl-modules/" }
+rand = "0.9.0-alpha.0"
+ring = "0.17"
+ctrlc = "3.1.0"
+
+[lib]
+name = "libafl_cc"
+crate-type = ["staticlib"]
