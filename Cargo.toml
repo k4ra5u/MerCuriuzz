@@ -1,0 +1,50 @@
+[workspace]
+resolver = "2"
+members = [
+    "vendors/LibAFL/libafl",
+    "vendors/LibAFL/libafl_bolts",
+    "vendors/LibAFL/libafl_cc",
+    "vendors/LibAFL/libafl_concolic/symcc_runtime",
+    "vendors/LibAFL/libafl_concolic/symcc_libafl",
+    "vendors/LibAFL/libafl_concolic/test/dump_constraints",
+    "vendors/LibAFL/libafl_concolic/test/runtime_test",
+    "vendors/LibAFL/libafl_derive",
+    "vendors/LibAFL/libafl_frida",
+    "vendors/LibAFL/libafl_libfuzzer",
+    "vendors/LibAFL/libafl_qemu",
+    "vendors/LibAFL/libafl_sugar",
+    "vendors/LibAFL/libafl_targets",
+    "vendors/LibAFL/libafl_tinyinst",
+    "vendors/LibAFL/utils/build_and_test_fuzzers",
+    "vendors/LibAFL/utils/deexit",
+    "vendors/LibAFL/utils/libafl_benches",
+    "vendors/LibAFL/utils/gramatron/construct_automata",
+    "vendors/LibAFL/utils/desyscall",
+    "vendors/LibAFL/utils/multi_machine_generator",
+    "libafl-modules",
+    "fuzzers/*",
+]
+default-members = [
+    "vendors/LibAFL/libafl",
+    "vendors/LibAFL/libafl_bolts",
+    "vendors/LibAFL/libafl_cc",
+    "vendors/LibAFL/libafl_derive",
+    "vendors/LibAFL/libafl_targets",
+]
+exclude = [
+    "vendors/libafl_nyx",
+    "vendors/libnyx",
+    "vendors/packer",
+    "vendors/QEMU-Nyx",
+    "vendors/LibAFL",
+
+]
+
+[workspace.package]
+version = "0.13.0"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+debug = true
