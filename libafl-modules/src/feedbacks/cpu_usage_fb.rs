@@ -48,7 +48,7 @@ where
         let final_cpu_usage = observer.final_cpu_usage;
         let avg_cpu = observer.final_based_cpu_usage;
         warn!("CPUUsageFeedback: avg_cpu: {:.2}%", avg_cpu);
-        if (final_cpu_usage > observer.based_cpu_usage +30.0) || (avg_cpu > observer.based_cpu_usage + 30.0) {
+        if (final_cpu_usage > observer.based_cpu_usage +50.0) || (avg_cpu > observer.based_cpu_usage + 50.0) {
             info!("CPUUsageFeedback: Interesting testcase");
             return Ok(true);
         }

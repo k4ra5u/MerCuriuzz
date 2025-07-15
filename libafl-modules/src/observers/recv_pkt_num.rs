@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cmp::max;
 use libafl::inputs::HasMutatorBytes;
 use libafl_bolts::ownedref::OwnedMutPtr;
 use quiche::frame::Frame;
@@ -55,6 +56,7 @@ pub enum DataObserverState {
 pub enum ACKObserverState {
     OK = 0,
     ACKRangeMismatch = 1,
+    ACKRangeNumMismatch = 1 << 1,
 }
 #[derive(Debug, Serialize, Deserialize,Clone,PartialEq)]
 pub enum OtherObserverState {
@@ -559,7 +561,7 @@ impl DifferentialRecvControlFrameObserver {
             for frame_info2 in self.second_observer.ctrl_frames_list.iter() {
                 if  mem::discriminant(&frame_info1.frame) == mem::discriminant(&frame_info2.frame) {
                     frame1_match = true;
-                    if abs(frame_info1.frame_num as i64 - frame_info2.frame_num as i64) > 10 {
+                    if abs(frame_info1.frame_num as i64 - frame_info2.frame_num as i64) > 50 {
                         self.judge_type = CtrlObserverState::CtrlFrameTypeNumMismatch;
                     }
                     break;
@@ -723,7 +725,7 @@ impl DifferentialRecvDataFrameObserver {
                 }
             }
         }
-        if abs(first_crypto_data_len as isize - second_crypto_data_len as isize) > 5000 {
+        if abs(first_crypto_data_len as isize - second_crypto_data_len as isize) > 3000 {
             self.judge_type = DataObserverState::DataFrameCryptoContentMismatch;
             return false;
         }
@@ -801,11 +803,11 @@ impl DifferentialRecvDataFrameObserver {
                 }
             }
         }
-        if first_stream_data_dismatch_len > 5000 || second_stream_data_dismatch_len > 5000 {
+        if first_stream_data_dismatch_len > 3000 || second_stream_data_dismatch_len > 3000 {
             self.judge_type = DataObserverState::DataFrameStreamContentMismatch;
             return false;
         }
-        if abs(first_stream_data_len as isize - second_stream_data_len as isize) > 5000 {
+        if abs(first_stream_data_len as isize - second_stream_data_len as isize) > 3000 {
             self.judge_type = DataObserverState::DataFrameStreamContentLenMismatch;
             return false;
         }
@@ -814,6 +816,8 @@ impl DifferentialRecvDataFrameObserver {
     }
 
     pub fn check_pr_frame_content(&mut self) -> bool {
+        let mut first_pr_dismatch = false;
+        let mut second_pr_dismatch = false;
         for first_pr_frame in self.first_observer.pr_frames_list.iter() {
             match &first_pr_frame.frame {
                 Frame::PathResponse { data } => {
@@ -835,8 +839,10 @@ impl DifferentialRecvDataFrameObserver {
                         }
                     }
                     if match_second_pr == false {
-                        self.judge_type = DataObserverState::DataFramePRContentMismatch;
-                        return false;
+                        second_pr_dismatch = true;
+                        break;
+                        // self.judge_type = DataObserverState::DataFramePRContentMismatch;
+                        // return false;
                     }
                 },
                 _ => {
@@ -866,8 +872,10 @@ impl DifferentialRecvDataFrameObserver {
                         }
                     }
                     if match_first_pr == false {
-                        self.judge_type = DataObserverState::DataFramePRContentMismatch;
-                        return false;
+                        first_pr_dismatch = true;
+                        break;
+                        // self.judge_type = DataObserverState::DataFramePRContentMismatch;
+                        // return false;
                     }
                 },
                 _ => {
@@ -875,6 +883,10 @@ impl DifferentialRecvDataFrameObserver {
                     debug!("Not a Padding frame");
                 }
             }
+        }
+        if first_pr_dismatch && second_pr_dismatch {
+            self.judge_type = DataObserverState::DataFramePRContentMismatch;
+            return false;
         }
         return true;
     }
@@ -1148,24 +1160,51 @@ impl DifferentialACKRangeObserver {
         &self.judge_type
     }
     pub fn perform_judge (&mut self) {
-        let mut first_list = self.first_observer.minimize_ACK_range();
-        let mut second_list = self.second_observer.minimize_ACK_range();
-
-        if first_list.len() != second_list.len() {
-            self.judge_type = ACKObserverState::ACKRangeMismatch;
-        }
-        for first_range in first_list.iter() {
-            for second_range in second_list.iter() {
-                if abs(first_range.start as i128 - second_range.start as i128) >10 || abs(first_range.end as i128 - second_range.end as i128) > 10 {
-                    self.judge_type = ACKObserverState::ACKRangeMismatch;
-                    break;
-                }
-            }
-        }
         info!("FirACKOb:{:?}", self.first_observer);
         info!("SecACKOb:{:?}", self.second_observer);
         self.first_observer = ACKRangeObserver::new("fake");
         self.second_observer = ACKRangeObserver::new("fake");
+
+        let mut first_list = self.first_observer.minimize_ACK_range();
+        let mut second_list = self.second_observer.minimize_ACK_range();
+        let mut first_acks = 0;
+        let mut second_acks = 0;
+
+        let first_end_pos = first_list.iter().map(|r| r.end).max().unwrap_or(0);
+        let second_end_pos = second_list.iter().map(|r| r.end).max().unwrap_or(0);
+        //预申请全0的数组，长度是first_end_pos与second_end_pos的最大值加1
+        let mut match_list = vec![0; (first_end_pos.max(second_end_pos) + 1) as usize];
+        
+
+        for first_range in first_list.iter() {
+            first_acks += (first_range.end - first_range.start + 1) as usize;
+            for pos in first_range.start..=first_range.end {
+                match_list[pos as usize] += 1;
+            }
+        }
+        for second_range in second_list.iter() {
+            second_acks += (second_range.end - second_range.start + 1) as usize;
+            for pos in second_range.start..=second_range.end {
+                match_list[pos as usize] += 1;
+            }
+        }
+        info!("fir_ack: {:?}, sec_ack: {:?}",first_acks,second_acks);
+        if abs(first_acks as i64 - second_acks as i64) > 100 {
+            self.judge_type = ACKObserverState::ACKRangeNumMismatch;
+            return;
+        }
+        let mut dismatch_nums  = 0;
+        for i in 0..match_list.len() {
+            if match_list[i] == 1 {
+                dismatch_nums +=1;
+            }
+        }
+        info!("ACK dismatch nums: {:?}",dismatch_nums);
+        if dismatch_nums -  abs(first_acks as i64 - second_acks as i64) > 50 {
+            self.judge_type = ACKObserverState::ACKRangeMismatch;
+            return;
+        }
+
     }
 }
 impl Named for DifferentialACKRangeObserver {

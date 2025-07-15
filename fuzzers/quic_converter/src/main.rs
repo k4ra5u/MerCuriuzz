@@ -113,7 +113,7 @@ struct Opt {
 
 
 
-const QUIC_SIZE: usize = 0x8000000;//128MB
+const QUIC_SIZE: usize = 0x100000;//128MB
 const OB_RESPONSE_SIZE: usize = 0x100000;//16MB
 const MAP_SIZE: usize = 1048260; 
 const MAX_DATAGRAM_SIZE: usize = 1350;

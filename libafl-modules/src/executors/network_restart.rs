@@ -266,6 +266,7 @@ SP: ShMemProvider,
             }
             if mem_observer.initial_mem == 0 {
                 mem_observer.initial_mem = mem_observer.before_mem;
+                warn!("initial_mem is 0, set to before_mem: {}", mem_observer.before_mem);
             }
             return true;
         }
@@ -704,8 +705,8 @@ where
                 }
             }
 
-            warn!("cov_fir cnt/tot: {:?}/{:?}",first_count,first_total);
-            warn!("cov_sec cnt/tot: {:?}/{:?}",sec_count,sec_total);
+            // warn!("cov_fir cnt/tot: {:?}/{:?}",first_count,first_total);
+            // warn!("cov_sec cnt/tot: {:?}/{:?}",sec_count,sec_total);
         }
         // for check_corpus to replay the srand seed
         if state.rand_seed() != 0{
@@ -784,7 +785,7 @@ where
             }
             self.pid = pid;
         }
-        warn!("pid:{:?}",self.pid);
+        info!("pid:{:?}",self.pid);
         let set_mem = self.set_initial_mem_usage(); 
         if set_mem == false {
             warn!("Failed to set initial memory usage");
@@ -845,6 +846,7 @@ where
             Some(conn) => {
             }
         }
+        info!("Connection established, from {:?} to {:?}",quic_st.local_addr.port(),quic_st.peer_addr.port());
         if exit_kind == ExitKind::Crash {
             error!("Failed to connect, markd as crash");
             //send stop to pid

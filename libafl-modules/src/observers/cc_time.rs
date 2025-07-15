@@ -5,6 +5,7 @@ use libafl_bolts::ownedref::OwnedMutPtr;
 use libafl_bolts::tuples::{Handle, Handled};
 use libafl_bolts::{Error, Named,tuples::MatchName,tuples::MatchNameRef};
 use log::info;
+use num_traits::abs;
 use serde::{Deserialize, Serialize};
 use libafl::{executors::ExitKind, inputs::UsesInput, state::UsesState};
 use quiche::{frame, packet, Connection, ConnectionId, Header};
@@ -20,7 +21,7 @@ pub enum CCTimesObserverState {
     OK,
     FirstCC,
     SecondCC,
-    MistypeErrorCode,
+    MistypePkn,
     MistypeCCReason,
 }
 
@@ -154,9 +155,9 @@ impl DifferentialCCTimesObserver {
         } else if self.first_observer.pkn != 0 && self.second_observer.pkn == 0 {
             self.judge_type = CCTimesObserverState::FirstCC;
         } else if self.first_observer.pkn != 0 && self.second_observer.pkn != 0 {
-            if self.first_observer.error_code != self.second_observer.error_code {
-                self.judge_type = CCTimesObserverState::MistypeErrorCode;
-            } else if self.first_observer.reason.len() !=0 && self.second_observer.reason.len() != 0 {
+            if abs(self.first_observer.pkn as i64 - self.second_observer.pkn as i64) > 100 {
+                self.judge_type = CCTimesObserverState::MistypePkn;
+            } else if self.first_observer.reason.len() != 0 && self.second_observer.reason.len() != 0 {
                 if self.first_observer.reason == self.second_observer.reason {
                     self.judge_type = CCTimesObserverState::OK;
                 } else {

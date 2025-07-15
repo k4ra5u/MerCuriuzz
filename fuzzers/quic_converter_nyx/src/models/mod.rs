@@ -108,7 +108,7 @@ impl QuicObservers {
     }
     pub fn judge_server_status(&self) -> u32 {
 
-        let output = std::process::Command::new(&self.judge_command)
+        let output = std::process::Command::new("sh").arg("-c").arg(&self.judge_command)
         .output()
         .expect("Failed to execute command");
 
@@ -116,7 +116,7 @@ impl QuicObservers {
         if output.status.success() {
             // 处理标准输出
             let stdout = str::from_utf8(&output.stdout).expect("Invalid UTF-8 in stdout");
-            debug!("Command executed successfully:\n{}", stdout);
+            println!("Command executed successfully:\n{}", stdout);
             // println!("Command executed successfully:\n{}", stdout);
             match stdout.trim().parse::<u32>() {
                 Ok(value) => return value,
@@ -378,7 +378,7 @@ impl QuicObservers {
 
     pub fn process_quic_input(&mut self,rand_seed: u32, input_struct: InputStruct) {
         let mut pid = self.judge_server_status();
-        info!("pid:{:?},recore_pid:{:?}",pid,self.pid);
+        println!("pid:{:?},recore_pid:{:?}",pid,self.pid);
         if pid != self.pid {
             error!("pid not match");
         }
@@ -576,7 +576,7 @@ impl QuicObservers {
             }
         }
         // sleep(Duration::from_secs(100));
-        info!("total send&recv frames : {:?} {:?}", total_sent_frames, total_recv_frames_len);
+        println!("total send&recv frames : {:?} {:?}", total_sent_frames, total_recv_frames_len);
         self.update_recv_pkt_obs(total_recv_bytes as u64,total_recv_pkts,total_sent_bytes as u64 ,total_sent_pkts);
         
         let valid_cpu_usage = self.update_cpu_usage_obs(cur_cpu_usages);

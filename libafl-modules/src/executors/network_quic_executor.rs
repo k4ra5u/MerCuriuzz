@@ -240,7 +240,7 @@ SP: ShMemProvider,
         }
     }
 
-    pub fn set_initial_mem_usage(&mut self) {
+    pub fn set_initial_mem_usage(&mut self) ->bool{
         let mem_observer_ref = MemObserver::new("mem").handle();
         if let Some(mem_observer) = self.observers.get_mut(&mem_observer_ref) {
             if self.pid != mem_observer.pid {
@@ -249,7 +249,13 @@ SP: ShMemProvider,
             }
             mem_observer.before_mem = 0;
             let map_file = format!("/proc/{}/maps", mem_observer.pid);
-            let file = File::open(map_file).unwrap();
+            let file = match File::open(map_file){
+                Ok(file) => file,
+                Err(e) => {
+                    error!("Failed to open file: {}", e);
+                    return false;
+                }
+            };
             let reader = io::BufReader::new(file);
             for cur_line in reader.lines() {
                 let line = cur_line.unwrap();
@@ -259,8 +265,11 @@ SP: ShMemProvider,
             }
             if mem_observer.initial_mem == 0 {
                 mem_observer.initial_mem = mem_observer.before_mem;
+                warn!("initial_mem is 0, set to before_mem: {}", mem_observer.before_mem);
             }
+            return true;
         }
+        return false;
     }
 
     pub fn inital_first_cpu_usage_obs(&mut self)  {
@@ -684,8 +693,8 @@ where
                 }
             }
 
-            warn!("cov_fir cnt/tot: {:?}/{:?}",first_count,first_total);
-            warn!("cov_sec cnt/tot: {:?}/{:?}",sec_count,sec_total);
+            // warn!("cov_fir cnt/tot: {:?}/{:?}",first_count,first_total);
+            // warn!("cov_sec cnt/tot: {:?}/{:?}",sec_count,sec_total);
         }
         // for check_corpus to replay the srand seed
         if state.rand_seed() != 0{
@@ -713,9 +722,6 @@ where
             sleep(Duration::from_millis(200));
             self.pid = 0;
         }
-
-        
-        
 
         
         //let mut recv_pkt_num_observer = None;
@@ -775,7 +781,13 @@ where
             }
             self.pid = pid;
         }
-        self.set_initial_mem_usage();
+        info!("pid:{:?}",self.pid);
+        let set_mem = self.set_initial_mem_usage(); 
+        if set_mem == false {
+            warn!("Failed to set initial memory usage");
+            return Ok(ExitKind::Crash);
+        }
+
 
 
          if is_first {

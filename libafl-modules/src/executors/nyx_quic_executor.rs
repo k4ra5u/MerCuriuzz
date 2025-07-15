@@ -129,9 +129,10 @@ S: State,
     }
 
     pub fn wait_for_quic_shm_res(&mut self) {
-        let res = self.quic_response.as_ref() as *const u8;
         while true {
+            let res = self.quic_response.as_mut() as *mut u8;
             if(unsafe { *res } == 1) {
+                unsafe { *res = 0 };
                 break;
             }
             else {
@@ -353,6 +354,17 @@ where
 
         
         self.wait_for_quic_shm_res();
+
+        /* Create pcap file if not exists */
+        let pcap_recv = self.parent.helper.execution_path_buffer;
+        let pcap_path_string = format!("pcaps/{}.pcap", state.rand_seed());
+        let pcap_file_path = Path::new(&pcap_path_string);
+        if !pcap_file_path.exists() {
+            let mut file = File::create(pcap_file_path).expect("Failed to create pcap file");
+            unsafe {
+                file.write_all(std::slice::from_raw_parts(pcap_recv, 0x100000)).expect("Failed to write pcap data");
+            }
+        }
 
 
         let exit_kind = self.update_all_obs();

@@ -1,3 +1,4 @@
+use std::io::BufReader;
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use std::path::PathBuf;
 use std::{
@@ -47,35 +48,26 @@ use ctrlc;
     author = "tokatoka <tokazerkje@outlook.com>"
 )]
 struct Opt {
-
     #[arg(
         help = "first harness name",
         name = "first_name",
-        default_value = "xquic"
+        default_value = "cf-quiche"
 
     )]
     first_name: String,
 
     #[arg(
-        help = "first conn port",
-        name = "first_port",
-        default_value = "28443"
-    )]
-    first_port: u16,
-
-    #[arg(
         help = "second harness name",
         name = "second_name",
-        default_value = "picoquic"
+        default_value = "google-quiche"
     )]
     second_name: String,
 
     #[arg(
-        help = "second conn port",
-        name = "second_port",
-        default_value = "28440"
+        help = "weather to use check corpus module",
+        long = "check-corpus",
     )]
-    second_port: u16,
+    check_corpus: bool,
 
     #[arg(
         help = "Signal used to stop child",
@@ -85,7 +77,31 @@ struct Opt {
         default_value = "SIGKILL"
     )]
     signal: Signal,
+    
 }
+
+
+fn parse_line(line: &str) -> Option<(String, u16, u32, u32)> {
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    if parts.len() != 3 {
+        return None;
+    }
+
+    let name = parts[0].trim_end_matches(':').to_string();
+    let port: u16 = parts[1].parse().ok()?;
+    let cpus: Vec<u32> = parts[2]
+        .split(',')
+        .map(|s| s.parse::<u32>())
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+
+    if cpus.len() == 2 {
+        Some((name, port, cpus[0], cpus[1]))
+    } else {
+        None
+    }
+}
+
 
 fn start_capture() -> std::process::Child {
 
@@ -172,6 +188,36 @@ pub fn main() {
     let opt = Opt::parse();
     // const MAP_SIZE: usize = 65536;
 
+    let project1 = &opt.first_name;
+    let project2 = &opt.second_name;
+    let base_dir = env::var("START_DIR").unwrap();
+    let conf_file = format!("{base_dir}/ports");
+
+
+    let file = File::open(conf_file).expect("Failed to open file 'port'");
+    let reader = BufReader::new(file);
+
+    let mut results = Vec::new();
+
+    for line in reader.lines() {
+        if let Ok(l) = line {
+            if let Some((name, port, cpu1, cpu2)) = parse_line(&l) {
+                if name == *project1 || name == *project2 {
+                    results.push((name, port, cpu1, cpu2));
+                }
+            }
+        }
+    }
+    if results[0].0 == *project2 {
+        results.reverse();
+    }
+    let (first_name, first_port, first_cpu1, first_cpu2) = results[0].clone();
+    let (second_name, second_port, second_cpu1, second_cpu2) = results[1].clone();
+    info!("First project: {}, port: {}, cpus: {}, {}", first_name, first_port, first_cpu1, first_cpu2);
+    info!("Second project: {}, port: {}, cpus: {}, {}", second_name, second_port, second_cpu1, second_cpu2);
+
+
+
     let mut shmem_provider = StdShMemProvider::new().unwrap();
 
     unsafe {
@@ -195,13 +241,16 @@ pub fn main() {
     // let mut first_harness = start_harness(&opt.first_name,unsafe {SHMEM_EDGE_MAP_FIRST.as_ref().unwrap().id().to_string()});
     // let mut second_harness = start_harness(&opt.second_name,unsafe {SHMEM_EDGE_MAP_SECOND.as_ref().unwrap().id().to_string()});
 
-    let corpus_dirs: Vec<PathBuf> = vec![PathBuf::from("corpus-nor/")];
+    let corpus_dirs: Vec<PathBuf> = match (opt.check_corpus) {
+        true => vec![PathBuf::from("corpus-nor/"),PathBuf::from("corpus/")],
+        false => vec![PathBuf::from("corpus-nor/")],
+    };
 
 
 
     let first_time_observer = TimeObserver::new("time");
     let first_recv_pkt_num_observer = RecvPktNumObserver::new("recv_pkt_num");
-    let mut first_conn_observer = NormalConnObserver::new("conn1","127.0.0.1".to_owned(),opt.first_port,"myserver.xx".to_owned());
+    let mut first_conn_observer = NormalConnObserver::new("conn1","127.0.0.1".to_owned(),first_port,"myserver.xx".to_owned());
     let mut first_cc_time_observer = CCTimesObserver::new("cc_time");
     let mut first_cpu_usage_observer = CPUUsageObserver::new("first_cpu_usage");
     let mut first_ctrl_observer = RecvControlFrameObserver::new("ctrl");
@@ -211,14 +260,14 @@ pub fn main() {
     let mut first_ucb_observer = UCBObserver::new("ucb1");
     let mut first_misc_ob = MiscObserver::new("misc");
     let mut first_pcap_ob = PcapObserver::new("pcap");
-    first_cpu_usage_observer.add_cpu_id(20);
-    first_cpu_usage_observer.add_cpu_id(21);
+    first_cpu_usage_observer.add_cpu_id(first_cpu1);
+    first_cpu_usage_observer.add_cpu_id(first_cpu2);
 
 
 
     let second_time_observer = TimeObserver::new("time");
     let second_recv_pkt_num_observer = RecvPktNumObserver::new("recv_pkt_num");
-    let mut second_conn_observer = NormalConnObserver::new("conn2","127.0.0.1".to_owned(),opt.second_port,"myserver.xx".to_owned());
+    let mut second_conn_observer = NormalConnObserver::new("conn2","127.0.0.1".to_owned(),second_port,"myserver.xx".to_owned());
     let mut second_cc_time_observer = CCTimesObserver::new("cc_time");
     let mut second_cpu_usage_observer = CPUUsageObserver::new("second_cpu_usage");
     let mut second_ctrl_observer = RecvControlFrameObserver::new("ctrl");
@@ -228,8 +277,8 @@ pub fn main() {
     let mut second_ucb_observer = UCBObserver::new("ucb2");
     let mut second_misc_ob = MiscObserver::new("misc");
     let mut second_pcap_ob = PcapObserver::new("pcap");
-    second_cpu_usage_observer.add_cpu_id(22);
-    second_cpu_usage_observer.add_cpu_id(23);
+    second_cpu_usage_observer.add_cpu_id(second_cpu1);
+    second_cpu_usage_observer.add_cpu_id(second_cpu2);
 
 
     
@@ -260,8 +309,10 @@ pub fn main() {
     let mut feedback = feedback_or!(
         // TimeFeedback::new(&time_observer),
         // RecvPktNumFeedback::new(&recv_pkt_num_observer),
-        UCBFeedback::new(&first_ucb_observer),
-        MaxMapFeedback::new(&diff_map_observer)
+        UCBFeedback::new(&first_ucb_observer,&first_cpu_usage_observer,&first_mem_observer,&first_cc_time_observer,&first_recv_pkt_num_observer,&first_ack_observer,&first_ctrl_observer,&first_data_observer),
+        UCBFeedback::new(&second_ucb_observer,&second_cpu_usage_observer,&second_mem_observer,&second_cc_time_observer,&second_recv_pkt_num_observer,&second_ack_observer,&second_ctrl_observer,&second_data_observer),
+
+        // MaxMapFeedback::new(&diff_map_observer)
         
     );    
     let mut objective = feedback_or!(
@@ -337,7 +388,7 @@ pub fn main() {
     let mut first_executor = NetworkQuicExecutor::new(first_observers,shmem_provider.clone())
         .start_command(opt.first_name.to_owned())
         .judge_command(opt.first_name.to_owned())
-        .port(opt.first_port)
+        .port(first_port)
         .timeout(Duration::from_millis(1000))
         .coverage_map_size(MAP_SIZE)
         .envs(vec![
@@ -345,13 +396,13 @@ pub fn main() {
             ("__AFL_SHM_ID_SIZE".to_string(), MAP_SIZE.to_string()),
         ])
         .set_frame_seed(frame_rand_seed)
-        .build_quic_struct("myserver.xx".to_owned(),opt.first_port, "127.0.0.1".to_owned())
+        .build_quic_struct("myserver.xx".to_owned(),first_port, "127.0.0.1".to_owned())
         .build();
 
     let mut second_executor = NetworkQuicExecutor::new(second_observers,shmem_provider.clone())
     .start_command(opt.second_name.to_owned())
     .judge_command(opt.second_name.to_owned())
-    .port(opt.second_port)
+    .port(second_port)
     .timeout(Duration::from_millis(1000))
     .coverage_map_size(MAP_SIZE)
     .envs(vec![
@@ -359,7 +410,7 @@ pub fn main() {
         ("__AFL_SHM_ID_SIZE".to_string(), MAP_SIZE.to_string()),
     ])
     .set_frame_seed(frame_rand_seed)
-    .build_quic_struct("myserver.xx".to_owned(),opt.second_port, "127.0.0.1".to_owned())
+    .build_quic_struct("myserver.xx".to_owned(),second_port, "127.0.0.1".to_owned())
     .build();
 
     let mut differential_executor = DiffExecutor::new(
@@ -382,6 +433,10 @@ pub fn main() {
                 )
             });
         println!("We imported {} inputs from disk.", state.corpus().count());
+    }
+
+    if opt.check_corpus {
+        return;
     }
     let mut tokens = Tokens::new();
     state.add_metadata(tokens);

@@ -72,7 +72,7 @@ struct Opt {
     #[arg(
         help = "second harness name",
         name = "second_name",
-        default_value = "quic-go"
+        default_value = "lsquic"
     )]
     second_name: String,
 
@@ -98,7 +98,7 @@ struct Opt {
 const start_dir: &str = "/tmp/quic-fuzzer-workspace/";
 #[allow(clippy::similar_names)]
 
-pub fn main() {
+pub fn main( ) {
     std::env::set_var("RUST_LOG", "info");
     env_logger::init();
     let opt = Opt::parse();
@@ -216,7 +216,8 @@ pub fn main() {
 
 
     let mut feedback = feedback_or!(
-        UCBFeedback::new(&first_ucb_observer),
+        UCBFeedback::new(&first_ucb_observer,&first_cpu_usage_observer,&first_mem_observer,&first_cc_time_observer,&first_recv_pkt_num_observer,&first_ack_observer,&first_ctrl_observer,&first_data_observer),
+        UCBFeedback::new(&second_ucb_observer,&second_cpu_usage_observer,&second_mem_observer,&second_cc_time_observer,&second_recv_pkt_num_observer,&second_ack_observer,&second_ctrl_observer,&second_data_observer),
         MaxMapFeedback::new(&map_observer),
         
     );    
@@ -318,7 +319,7 @@ pub fn main() {
         second_pcap_ob_ref,
         second_ucb_observer_ref,
         NyxExecutorBuilder::new().build(helper.1, second_observers),
-        true
+        false
     )
     .set_frame_seed(frame_rand_seed);
 
@@ -348,7 +349,8 @@ pub fn main() {
     // let mutator = StdScheduledMutator::with_max_stack_pow(quic_mutations(), 6);
     // let mutator = StdScheduledMutator::new(havoc_mutations());
     let mut stages = tuple_list!(
-        StdPowerMutationalStage::new(mutator),
+        StdMutationalStage::new(mutator),
+        // StdPowerMutationalStage::new(mutator),
         // StdTMinMutationalStage::new(minimizer, factory, 128)
     );
     fuzzer

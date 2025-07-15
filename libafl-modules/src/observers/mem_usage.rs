@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cmp::max;
 use std::fs::File;
 use std::io::{self, BufRead};
 use std::iter::FusedIterator;
@@ -7,7 +8,8 @@ use libafl::inputs::HasMutatorBytes;
 use libafl_bolts::ownedref::OwnedMutPtr;
 use libafl_bolts::tuples::{Handle, Handled};
 use libafl_bolts::{Error, Named,tuples::MatchName,tuples::MatchNameRef};
-use log::info;
+use log::{info, warn};
+use num_traits::abs;
 use serde::{Deserialize, Serialize};
 use libafl::{executors::ExitKind, inputs::UsesInput, state::UsesState};
 use quiche::{frame, packet, Connection, ConnectionId, Header};
@@ -98,10 +100,22 @@ impl MemObserver {
     pub fn pre_execv(&mut self) -> Result<(), Error> {
         if !self.record_remote() {
             self.before_mem = 0;
-            self.pid = 0;
+            // self.pid = 0;
             if self.pid != 0 {
                 let map_file = format!("/proc/{}/maps", self.pid);
-                let file = File::open(map_file)?;
+                let file = match File::open(map_file){
+                    Ok(file) => file,
+                    Err(err) => {
+                        warn!("Failed to open memory map file: {}", err);
+                        self.before_mem = 0;
+                        self.initial_mem = 0;
+                        self.allowed_mem = 0;
+                        self.after_mem = 0;
+                        self.pid = 0;
+
+                        return Ok(());
+                    }
+                };
                 let reader = io::BufReader::new(file);
                 for cur_line in reader.lines() {
                     let line = cur_line?;
@@ -126,7 +140,19 @@ impl MemObserver {
             }
             self.after_mem = 0;
             let map_file = format!("/proc/{}/maps", self.pid);
-            let file = File::open(map_file)?;
+            let file = match File::open(map_file){
+                    Ok(file) => file,
+                    Err(err) => {
+                        warn!("Failed to open memory map file: {}", err);
+                        self.before_mem = 0;
+                        self.initial_mem = 0;
+                        self.allowed_mem = 0;
+                        self.after_mem = 0;
+                        self.pid = 0;
+                        
+                        return Ok(());
+                    }
+                };
             let reader = io::BufReader::new(file);
             for cur_line in reader.lines() {
                 let line = cur_line?;
@@ -135,7 +161,7 @@ impl MemObserver {
                 }
             }
             if self.allowed_mem == 0 {
-                self.allowed_mem = self.after_mem;
+                self.allowed_mem = max(self.after_mem - self.initial_mem, 50000);
             }
             // info!("post_exec of MemObserver: {:?}", self);
         }
@@ -152,10 +178,22 @@ where
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
         if !self.record_remote() {
             self.before_mem = 0;
-            self.pid = 0;
+            // self.pid = 0;
             if self.pid != 0 {
                 let map_file = format!("/proc/{}/maps", self.pid);
-                let file = File::open(map_file)?;
+                let file = match File::open(map_file){
+                    Ok(file) => file,
+                    Err(err) => {
+                        warn!("Failed to open memory map file: {}", err);
+                        self.before_mem = 0;
+                        self.initial_mem = 0;
+                        self.allowed_mem = 0;
+                        self.after_mem = 0;
+                        self.pid = 0;
+                        
+                        return Ok(());
+                    }
+                };
                 let reader = io::BufReader::new(file);
                 for cur_line in reader.lines() {
                     let line = cur_line?;
@@ -177,12 +215,28 @@ where
     ) -> Result<(), Error> {
         if !self.record_remote() {
             if !self.judge_proc_exist() {
-                self.after_mem = self.before_mem;
+                self.after_mem = 0;
+                self.pid = 0;
+                self.initial_mem = 0;
+                self.allowed_mem = 0;
+                self.before_mem = 0;
                 return Ok(());
             }
             self.after_mem = 0;
             let map_file = format!("/proc/{}/maps", self.pid);
-            let file = File::open(map_file)?;
+            let file = match File::open(map_file){
+                Ok(file) => file,
+                Err(err) => {
+                    warn!("Failed to open memory map file: {}", err);
+                    self.before_mem = 0;
+                    self.initial_mem = 0;
+                    self.allowed_mem = 0;
+                    self.after_mem = 0;
+                    self.pid = 0;
+                    
+                    return Ok(());
+                }
+            };
             let reader = io::BufReader::new(file);
             for cur_line in reader.lines() {
                 let line = cur_line?;
@@ -191,7 +245,7 @@ where
                 }
             }
             if self.allowed_mem == 0 {
-                self.allowed_mem = self.after_mem;
+                self.allowed_mem = max(self.after_mem - self.initial_mem, 50000);
             }
             // info!("post_exec of MemObserver: {:?}", self);
         }
@@ -254,47 +308,50 @@ impl DifferentialMemObserver {
         let mut second_mem_rev = false;
         if self.first_observer.after_mem > self.first_observer.before_mem {
             let first_mem_diff = self.first_observer.after_mem - self.first_observer.before_mem;
-            let first_running_diff = self.first_observer.before_mem - self.first_observer.initial_mem;
-            if first_mem_diff as f64 / first_running_diff as f64 > 1.0 {
-                if first_mem_diff > self.first_observer.allowed_mem*3 {
-                    self.judge_type = MemObserverState::FirMemLeak;
-                }
+            // let first_running_diff = self.first_observer.before_mem - self.first_observer.initial_mem;
+            // if first_mem_diff as f64 / first_running_diff as f64 > 1.0 {
+            if first_mem_diff > self.first_observer.allowed_mem*3 {
+                self.judge_type = MemObserverState::FirMemLeak;
             }
+            // }
         } else {
             first_mem_rev = true;
         }
         if self.second_observer.after_mem > self.second_observer.before_mem {
             let second_mem_diff = self.second_observer.after_mem - self.second_observer.before_mem;
-            let second_running_diff = self.second_observer.before_mem - self.second_observer.initial_mem;
-            if second_mem_diff as f64 / second_running_diff as f64 > 1.0 {
-                if second_mem_diff > self.second_observer.allowed_mem*3 {
-                    self.judge_type = MemObserverState::SecMemLeak;
-                }
+            // let second_running_diff = self.second_observer.before_mem - self.second_observer.initial_mem;
+            // if second_mem_diff as f64 / second_running_diff as f64 > 1.0 {
+            if second_mem_diff > self.second_observer.allowed_mem*3 {
+                self.judge_type = MemObserverState::SecMemLeak;
             }
+            // }
         } else {
             second_mem_rev = true;
         }   
         if !first_mem_rev && !second_mem_rev {
             let first_mem_diff = self.first_observer.after_mem - self.first_observer.before_mem;
             let second_mem_diff = self.second_observer.after_mem - self.second_observer.before_mem;
-            let first_running_diff = self.first_observer.before_mem - self.first_observer.initial_mem;
-            let second_running_diff = self.second_observer.before_mem - self.second_observer.initial_mem;
+            let mem_abs = abs(first_mem_diff - second_mem_diff);
+            let allow_mem_diff_abs = abs(self.first_observer.allowed_mem - self.second_observer.allowed_mem);
             if first_mem_diff > second_mem_diff {
-                if first_mem_diff - second_mem_diff > 50000 || (first_mem_diff as f64 / first_running_diff as f64 )> 1.0 {
-                    if first_mem_diff > self.first_observer.allowed_mem*3 {
+                if mem_abs > 500000 || (mem_abs > 3*allow_mem_diff_abs) {
+                    if self.judge_type == MemObserverState::SecMemLeak {
+                        self.judge_type = MemObserverState::BothMemLeak;
+                    }
+                    else {
                         self.judge_type = MemObserverState::FirMemLeak;
                     }
                 }
             }
             if second_mem_diff > first_mem_diff {
-                if second_mem_diff - first_mem_diff > 50000 || (second_mem_diff as f64 / second_running_diff as f64 )> 1.0 {
-                    if second_mem_diff  > self.second_observer.allowed_mem*3 {
+                if mem_abs > 500000 || (mem_abs > 3*allow_mem_diff_abs) {
+                    if self.judge_type == MemObserverState::FirMemLeak {
+                        self.judge_type = MemObserverState::BothMemLeak;
+                    }
+                    else {
                         self.judge_type = MemObserverState::SecMemLeak;
                     }
                 }
-            }
-            if first_running_diff >0  && second_mem_diff >0 && (first_mem_diff as f64 / first_running_diff as f64 > 1.0) && (second_mem_diff as f64 / second_running_diff as f64 > 1.0) {
-                self.judge_type = MemObserverState::BothMemLeak;
             }
         }
         info!("FirMemOb:{:?}", self.first_observer);

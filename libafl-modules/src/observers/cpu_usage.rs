@@ -25,6 +25,7 @@ pub enum CPUUsageObserverState {
     OK,
     FirstCPU,
     SecondCPU,
+    BothCPU,
 }
 
 #[derive( Serialize, Deserialize,Debug, Clone)]
@@ -227,7 +228,7 @@ where
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
         if !self.record_remote() {
             // self.cpu_ids = Vec::new();
-            self.based_cpu_usage = 0.0;
+            // self.based_cpu_usage = 0.0;
             self.final_based_cpu_usage = 0.0;
             self.record_times = 0;
             self.record_cpu_usages.clear();
@@ -256,6 +257,9 @@ where
             let avg_cpu = total_cpu / self.record_times as f64;
             self.set_final_based_cpu_usage(avg_cpu);
             self.set_final_cpu_usage(final_cpu_usage);
+            if self.based_cpu_usage == 0.0 {
+                self.based_cpu_usage = avg_cpu;
+            }
             // info!("post_exec of CPUUsageObserver: {:?},{:?}", self.name,self.final_based_cpu_usage);
         }
         Ok(())
@@ -313,13 +317,33 @@ impl DifferentialCPUUsageObserver {
     pub fn perform_judge(&mut self) {
         let first_cpu_usage = self.first_observer.final_based_cpu_usage;
         let second_cpu_usage = self.second_observer.final_based_cpu_usage;
-        if first_cpu_usage > second_cpu_usage && first_cpu_usage - second_cpu_usage > 40.0 {
+        if first_cpu_usage - self.first_observer.based_cpu_usage > 80.0 || first_cpu_usage > 95.0 {
             self.judge_type = CPUUsageObserverState::FirstCPU;
-        } else if second_cpu_usage > first_cpu_usage && second_cpu_usage - first_cpu_usage > 40.0 {
-            self.judge_type = CPUUsageObserverState::SecondCPU;
-        } else {
-            self.judge_type = CPUUsageObserverState::OK;
         }
+        if second_cpu_usage - self.second_observer.based_cpu_usage > 80.0 || second_cpu_usage > 95.0  {
+            if self.judge_type == CPUUsageObserverState::FirstCPU {
+                self.judge_type = CPUUsageObserverState::BothCPU;
+            }
+            else {
+                self.judge_type = CPUUsageObserverState::SecondCPU;
+            }
+        }
+        if first_cpu_usage > second_cpu_usage && first_cpu_usage - second_cpu_usage > 70.0 {
+            if self.judge_type == CPUUsageObserverState::SecondCPU {
+                self.judge_type = CPUUsageObserverState::BothCPU;
+            }
+            else if self.judge_type == CPUUsageObserverState::OK {
+                self.judge_type = CPUUsageObserverState::FirstCPU;
+            }
+        } else if second_cpu_usage > first_cpu_usage && second_cpu_usage - first_cpu_usage > 70.0 {
+            if self.judge_type == CPUUsageObserverState::FirstCPU {
+                self.judge_type = CPUUsageObserverState::BothCPU;
+            }
+            else if self.judge_type == CPUUsageObserverState::OK {
+                self.judge_type = CPUUsageObserverState::SecondCPU;
+            }
+        } 
+
         info!("{:?},{:?}", self.first_observer.name,self.first_observer.final_based_cpu_usage);
         info!("{:?},{:?}", self.second_observer.name,self.second_observer.final_based_cpu_usage);
         self.first_observer = CPUUsageObserver::new("fake");

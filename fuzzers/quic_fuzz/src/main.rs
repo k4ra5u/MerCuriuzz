@@ -1,3 +1,4 @@
+use std::io::BufReader;
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use std::path::PathBuf;
 use std::{
@@ -48,35 +49,26 @@ use ctrlc;
     author = "tokatoka <tokazerkje@outlook.com>"
 )]
 struct Opt {
-
     #[arg(
         help = "first harness name",
         name = "first_name",
-        default_value = "lsquic"
+        default_value = "cf-quiche"
 
     )]
     first_name: String,
 
     #[arg(
-        help = "first conn port",
-        name = "first_port",
-        default_value = "58443"
-    )]
-    first_port: u16,
-
-    #[arg(
         help = "second harness name",
         name = "second_name",
-        default_value = "h2o"
+        default_value = "google-quiche"
     )]
     second_name: String,
 
     #[arg(
-        help = "second conn port",
-        name = "second_port",
-        default_value = "58440"
+        help = "weather to use check corpus module",
+        long = "check-corpus",
     )]
-    second_port: u16,
+    check_corpus: bool,
 
     #[arg(
         help = "Signal used to stop child",
@@ -86,6 +78,29 @@ struct Opt {
         default_value = "SIGKILL"
     )]
     signal: Signal,
+    
+}
+
+
+fn parse_line(line: &str) -> Option<(String, u16, u32, u32)> {
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    if parts.len() != 3 {
+        return None;
+    }
+
+    let name = parts[0].trim_end_matches(':').to_string();
+    let port: u16 = parts[1].parse().ok()?;
+    let cpus: Vec<u32> = parts[2]
+        .split(',')
+        .map(|s| s.parse::<u32>())
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+
+    if cpus.len() == 2 {
+        Some((name, port, cpus[0], cpus[1]))
+    } else {
+        None
+    }
 }
 
 fn start_capture() -> std::process::Child {
@@ -197,6 +212,35 @@ pub fn main() {
     env_logger::init();
     let opt = Opt::parse();
 
+    let project1 = &opt.first_name;
+    let project2 = &opt.second_name;
+    let base_dir = env::var("START_DIR").unwrap();
+    let conf_file = format!("{base_dir}/ports");
+
+
+    let file = File::open(conf_file).expect("Failed to open file 'port'");
+    let reader = BufReader::new(file);
+
+    let mut results = Vec::new();
+
+    for line in reader.lines() {
+        if let Ok(l) = line {
+            if let Some((name, port, cpu1, cpu2)) = parse_line(&l) {
+                if name == *project1 || name == *project2 {
+                    results.push((name, port, cpu1, cpu2));
+                }
+            }
+        }
+    }
+    if results[0].0 == *project2 {
+        results.reverse();
+    }
+    let (first_name, first_port, first_cpu1, first_cpu2) = results[0].clone();
+    let (second_name, second_port, second_cpu1, second_cpu2) = results[1].clone();
+    info!("First project: {}, port: {}, cpus: {}, {}", first_name, first_port, first_cpu1, first_cpu2);
+    info!("Second project: {}, port: {}, cpus: {}, {}", second_name, second_port, second_cpu1, second_cpu2);
+
+
     let mut shmem_provider = StdShMemProvider::new().unwrap();
 
     unsafe {
@@ -224,19 +268,19 @@ pub fn main() {
     // let mut first_harness = start_harness(&opt.first_name,unsafe {SHMEM_EDGE_MAP_FIRST.as_ref().unwrap().id().to_string()});
     // let mut second_harness = start_harness(&opt.second_name,unsafe {SHMEM_EDGE_MAP_SECOND.as_ref().unwrap().id().to_string()});
     let mut first_quic_converter = start_quic_converter(
-        &opt.first_port.to_string(),
+        &first_port.to_string(),
         unsafe {SHMEM_QUIC_STRUCT_FIRST.as_ref().unwrap().id().to_string()},
         unsafe {SHMEM_EDGE_MAP_FIRST.as_ref().unwrap().id().to_string()},
         unsafe {SHMEM_OB_RESPONSE_FIRST.as_ref().unwrap().id().to_string()},
-        "50,51".to_owned(),
+        first_cpu1.to_string() + "," + &first_cpu2.to_string(),
         opt.first_name.to_owned(),
     );
     let mut second_quic_converter = start_quic_converter(
-        &opt.second_port.to_string(),
+        &second_port.to_string(),
         unsafe {SHMEM_QUIC_STRUCT_SECOND.as_ref().unwrap().id().to_string()},
         unsafe {SHMEM_EDGE_MAP_SECOND.as_ref().unwrap().id().to_string()},
         unsafe {SHMEM_OB_RESPONSE_SECOND.as_ref().unwrap().id().to_string()},
-        "52,53".to_owned(),
+        second_cpu1.to_string() + "," + &second_cpu2.to_string(),
         opt.second_name.to_owned(),
     );
 
@@ -247,7 +291,7 @@ pub fn main() {
 
     let mut first_time_observer = TimeObserver::new("time");
     let mut first_recv_pkt_num_observer = RecvPktNumObserver::new("recv_pkt_num");
-    let mut first_conn_observer = NormalConnObserver::new("conn","127.0.0.1".to_owned(),opt.first_port,"myserver.xx".to_owned());
+    let mut first_conn_observer = NormalConnObserver::new("conn","127.0.0.1".to_owned(),first_port,"myserver.xx".to_owned());
     let mut first_cc_time_observer = CCTimesObserver::new("cc_time");
     let mut first_cpu_usage_observer = CPUUsageObserver::new("first_cpu_usage");
     let mut first_ctrl_observer = RecvControlFrameObserver::new("ctrl");
@@ -283,7 +327,7 @@ pub fn main() {
 
     let mut second_time_observer = TimeObserver::new("time");
     let mut second_recv_pkt_num_observer = RecvPktNumObserver::new("recv_pkt_num");
-    let mut second_conn_observer = NormalConnObserver::new("conn","127.0.0.1".to_owned(),opt.second_port,"myserver.xx".to_owned());
+    let mut second_conn_observer = NormalConnObserver::new("conn","127.0.0.1".to_owned(),second_port,"myserver.xx".to_owned());
     let mut second_cc_time_observer = CCTimesObserver::new("cc_time");
     let mut second_cpu_usage_observer = CPUUsageObserver::new("second_cpu_usage");
     let mut second_ctrl_observer = RecvControlFrameObserver::new("ctrl");
@@ -338,7 +382,8 @@ pub fn main() {
     let mut feedback = feedback_or!(
         // TimeFeedback::new(&time_observer),
         // RecvPktNumFeedback::new(&recv_pkt_num_observer),
-        UCBFeedback::new(&first_ucb_observer),
+        UCBFeedback::new(&first_ucb_observer,&first_cpu_usage_observer,&first_mem_observer,&first_cc_time_observer,&first_recv_pkt_num_observer,&first_ack_observer,&first_ctrl_observer,&first_data_observer),
+        UCBFeedback::new(&second_ucb_observer,&second_cpu_usage_observer,&second_mem_observer,&second_cc_time_observer,&second_recv_pkt_num_observer,&second_ack_observer,&second_ctrl_observer,&second_data_observer),
         MaxMapFeedback::new(&diff_map_observer)
         
     );    

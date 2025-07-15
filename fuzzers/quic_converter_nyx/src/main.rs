@@ -89,7 +89,7 @@ struct Opt {
 
 
 
-const QUIC_SIZE: usize = 0x8000000;//128MB
+const QUIC_SIZE: usize = 0x100000;//128MB
 const OB_RESPONSE_SIZE: usize = 0x100000;//16MB
 const MAP_SIZE: usize = 1048260; 
 const MAX_DATAGRAM_SIZE: usize = 1350;
@@ -105,12 +105,14 @@ struct ShmData {
 
 pub fn main() {
     std::env::set_var("RUST_LOG", "info");
+    std::env::set_var("SSLKEYLOGFILE", "key.log");
+    std::env::set_var("PCAPS_DIR", "pcaps");
     let opt = Opt::parse();
     // 根据传输类型初始化不同资源
     // 共享内存初始化
     let mut quic_shmem_provider = StdShMemProvider::new().unwrap();
     let input_shm_id =std::env::var("__EXECUTION_PATH").unwrap();
-    let res_shm_id = std::env::var("__quic_response").unwrap();
+    let res_shm_id = std::env::var("__QUIC_RESPONSE").unwrap();
     println!("input_shm_id: {}", input_shm_id);
     println!("res_shm_id: {}", res_shm_id);
 
@@ -158,7 +160,11 @@ pub fn main() {
     );
 
     quic_obs.init(opt.cpuid);
-        
+    // println!("wrote AAAAAA to quic_response shared memory");
+    // let ob_shmem = ob_shm_data.as_mut().unwrap();
+    // let ob_buf = ob_shmem.mem.as_slice_mut();
+    // ob_buf[0] = 42; // 标记为有效数据
+    // ob_buf[1..7].copy_from_slice(&b"AAAAAA"[..]); // 写入AAAAAA
 
     loop {
         // 共享内存处理逻辑（保持原有）
@@ -172,11 +178,15 @@ pub fn main() {
         let data_len = u64::from_be_bytes(buf[1..9].try_into().unwrap()) as usize;
         let rand_seed = u32::from_be_bytes(buf[9..13].try_into().unwrap());
         let input_struct = InputStruct_deserialize(&buf[13..13+data_len]);
+        println!("Received input struct: {:?}", input_struct);
 
         // 判断服务器是否存活
 
         // 复用原有QUIC实例
         quic_obs.process_quic_input(rand_seed, input_struct);
+
+        println!("Processed QUIC input with rand_seed: {}", rand_seed);
+        println!("Observers: {:?}", quic_obs.observers);
         //bincode::deserialize::<RemoteObsData>(&serde_obs_buf).unwrap();
         let serislized_data = bincode::serialize(&quic_obs.observers).unwrap();
         let ob_shmem = ob_shm_data.as_mut().unwrap();

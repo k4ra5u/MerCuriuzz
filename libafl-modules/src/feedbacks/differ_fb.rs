@@ -147,7 +147,7 @@ where
 
         let mut interesting_flag = false;
         let diff_cc_ob_judge_type = diff_cc_ob.judge_type();
-        if *diff_cc_ob_judge_type != CCTimesObserverState::OK && *diff_cc_ob_judge_type != CCTimesObserverState::MistypeCCReason {
+        if *diff_cc_ob_judge_type != CCTimesObserverState::OK && *diff_cc_ob_judge_type != CCTimesObserverState::MistypeCCReason && *diff_cc_ob_judge_type != CCTimesObserverState::MistypePkn {
             warn!("vul of CC testcase: {:?}",diff_cc_ob_judge_type);
             interesting_flag = true;
         }
@@ -155,7 +155,7 @@ where
             warn!("vul of CPU testcase: {:?}",diff_cpu_ob.judge_type());
             interesting_flag = true;
         }
-        if *diff_mem_ob.judge_type() != MemObserverState::OK && *diff_mem_ob.judge_type() != MemObserverState::BothMemLeak {
+        if *diff_mem_ob.judge_type() != MemObserverState::OK {
             warn!("vul of Mem testcase: {:?}",diff_mem_ob.judge_type());
             interesting_flag = true;
         }

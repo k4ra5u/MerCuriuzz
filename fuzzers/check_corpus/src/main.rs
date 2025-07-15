@@ -158,7 +158,7 @@ fn start_quic_converter(port: &str, shmem_id: String) -> std::process::Child {
 }
 
 #[allow(clippy::similar_names)]
-const QUIC_SIZE: usize = 0x8000000;//128MB
+const QUIC_SIZE: usize = 0x00;//128MB
 const OB_RESPONSE_SIZE: usize = 0x100000;//16MB
 const MAP_SIZE: usize = 0x100000; 
 static mut SHMEM_EDGE_MAP_FIRST: Option<UnixShMem> = None;
@@ -231,14 +231,7 @@ pub fn main() {
     let mut second_pcap_ob = PcapObserver::new("pcap");
     second_cpu_usage_observer.add_cpu_id(32);
     second_cpu_usage_observer.add_cpu_id(33);
-
-
     
-
-
-    
-
-
 
     let diff_cc_ob = DifferentialCCTimesObserver::new(&mut first_cc_time_observer, &mut second_cc_time_observer);
     let diff_cpu_ob = DifferentialCPUUsageObserver::new(&mut first_cpu_usage_observer, &mut second_cpu_usage_observer);
@@ -261,7 +254,8 @@ pub fn main() {
     let mut feedback = feedback_or!(
         // TimeFeedback::new(&time_observer),
         // RecvPktNumFeedback::new(&recv_pkt_num_observer),
-        UCBFeedback::new(&first_ucb_observer),
+        UCBFeedback::new(&first_ucb_observer,&first_cpu_usage_observer,&first_mem_observer,&first_cc_time_observer,&first_recv_pkt_num_observer,&first_ack_observer,&first_ctrl_observer,&first_data_observer),
+        UCBFeedback::new(&second_ucb_observer,&second_cpu_usage_observer,&second_mem_observer,&second_cc_time_observer,&second_recv_pkt_num_observer,&second_ack_observer,&second_ctrl_observer,&second_data_observer),
         MaxMapFeedback::new(&diff_map_observer)
         
     );    

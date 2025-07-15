@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use libafl::{corpus::Testcase, inputs::HasMutatorBytes, prelude::ObserversTuple, state::HasRand};
+use libafl::{corpus::Testcase, inputs::HasMutatorBytes, prelude::ObserversTuple, state::{HasRand, HasReward}};
 use libafl_bolts::{
     ownedref::OwnedMutPtr,
     rands::Rand,
@@ -198,7 +198,7 @@ where
 impl<S> RemovableScheduler for MCTSScheduler<S>
 where
 
-    S: HasCorpus + HasRand + HasTestcase + State,
+    S: HasCorpus + HasRand + HasTestcase + HasReward + State,
 {
     /// This will *NOT* neutralize the effect of this removed testcase from the global data such as `SchedulerMetadata`
     fn on_remove(
@@ -224,7 +224,7 @@ where
 
 impl<S> Scheduler for MCTSScheduler<S>
 where
-    S: HasCorpus + HasRand + HasTestcase + State,
+    S: HasCorpus + HasRand + HasTestcase + HasReward + State,
 {
     /// Called when a [`Testcase`] is added to the corpus
     fn on_add(&mut self, state: &mut S, id: CorpusId) -> Result<(), Error> {
@@ -257,7 +257,7 @@ where
         OT: ObserversTuple<Self::State>,
     {
         let observer = observers.get(&self.observer_handle).unwrap();
-        self.evaluate_res = observer.get_reward();
+        self.evaluate_res = state.reward();
 
         Ok(())
         // self.evaluate(state, input, observers)
