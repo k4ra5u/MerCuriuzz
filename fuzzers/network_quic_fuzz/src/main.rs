@@ -388,6 +388,7 @@ pub fn main() {
     let mut first_executor = NetworkQuicExecutor::new(first_observers,shmem_provider.clone())
         .start_command(opt.first_name.to_owned())
         .judge_command(opt.first_name.to_owned())
+        .is_first()
         .port(first_port)
         .timeout(Duration::from_millis(1000))
         .coverage_map_size(MAP_SIZE)

@@ -321,8 +321,20 @@ SP: ShMemProvider,
             for cur_cpu_usage in cur_cpu_usages.iter() {
                 cpu_usage_observer.add_record_cpu_usage(*cur_cpu_usage);
                 cpu_usage_observer.add_frame_record_times();
-                let curr_process_time = get_process_cpu_time(cpu_usage_observer.pid).expect("Failed to get process CPU time");
-                let curr_cpu_times = get_cpu_time(&cpu_usage_observer.cpu_ids).expect("Failed to get CPU core times");
+                let curr_process_time = match get_process_cpu_time(cpu_usage_observer.pid) {
+                    Some(time) => time,
+                    None => {
+                        error!("Failed to get process CPU time");
+                        return false;
+                    }
+                };
+                let curr_cpu_times = match get_cpu_time(&cpu_usage_observer.cpu_ids) {
+                    Some(times) => times,
+                    None => {
+                        error!("Failed to get CPU core times");
+                        return false;
+                    }
+                };
                 cpu_usage_observer.prev_cpu_times = curr_cpu_times.clone();
                 cpu_usage_observer.prev_process_time = curr_process_time;
             }
@@ -660,7 +672,7 @@ where
         //let mut observers: RefIndexable<&mut OT, OT> = self.observers_mut();
         // info!("now seed:{:?}",self.frame_rand_seed);
         let mut is_first = false;
-        if self.is_first{
+        if self.is_first {
             is_first = true;
         }
         if is_first {
@@ -875,6 +887,7 @@ where
         let mut total_sent_bytes = 0;
         let mut total_recv_frames_len = 0;
         let cycles = input_struct.frames_cycle.len();
+        let mut sending_acks: Vec<u64> = Vec::new();
         for cur_cycle in 0..cycles{
             let repeat_num = input_struct.frames_cycle[cur_cycle].repeat_num;
             let mut start_pos = 0;
@@ -884,6 +897,19 @@ where
                     start_pos = i as u64 + 1;
                     let mut frame_list: Vec<frame::Frame> = Vec::new();
                     for frame in frames.iter() {
+                        for pkn in sending_acks.iter() {
+                            let mut ranges = RangeSet::default();
+                            ranges.insert(*pkn..*pkn+1);
+                            let ack_frame = frame::Frame::ACK {
+                                ack_delay: 0,
+                                ranges,
+                                ecn_counts: None,
+                            };
+                            frame_list.push(ack_frame.clone());
+                            total_sent_frames += 1;
+                            debug!("sending ack frame: {:?}", ack_frame);
+                        }
+                        sending_acks.clear();
     
                         debug!("frame len: {:?}", frame.wire_len());
                         // warn!("frame : {:?}", frame);
@@ -928,6 +954,25 @@ where
                                     total_recv_frames_len += recv_frames.len();
                                     let mut recv_pkts = 0;
                                     let mut recv_bytes = 0;
+                                    debug!("recv frames: {:?}", recv_frames);
+                                    for recv_frame in recv_frames.iter() {
+                                        match &recv_frame.frame {
+                                            frame::Frame::ACK { ack_delay, ranges, ecn_counts } => {
+                                            }
+                                            //对于所有其他情况 统一处理：
+                                            _ => {
+                                                if !sending_acks.contains(&recv_frame.pkn) {
+                                                    // info!("recv frame: {:?}", recv_frame);
+                                                    // info!("recv frame pkn: {:?}", recv_frame.pkn);
+                                                    // info!("recv frame type: {:?}", recv_frame.frame);
+                                                    sending_acks.push(recv_frame.pkn);
+                                                    break;
+                                                }
+                                               
+                                            }
+                                        }
+                                    }
+
                                     for recv_frame in recv_frames.iter() {
                                         total_recv_frames.push(recv_frame.clone());
                                         recv_pkts += 1;

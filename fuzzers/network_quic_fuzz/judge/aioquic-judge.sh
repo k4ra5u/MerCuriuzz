@@ -1,2 +1,2 @@
 #!/bin/bash
-ps aux | grep http3 | grep -v grep | awk '{print $2}' | head -n 1
+ps aux | grep examples/http3_server.py | grep -v grep | awk '{print $2}' | head -n 1
