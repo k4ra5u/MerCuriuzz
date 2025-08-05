@@ -138,7 +138,7 @@ export RUSTFLAGS="-C link-arg=-lstdc++"
 CARGO_TARGET_DIR=target  cargo build
 ```
 Usage:
-Before testing, you need to configure the startup parameters and judgment parameters of the two QUIC implementations, which are located in the start and judge directories of the main program project. You need to replace the parameters of the original <program name>.sh file with the program path of the local machine, and modify the content of the ports file in the start directory, which describes the CPU resources and port information used by each QUIC implementation. 
+Before testing, you need to configure the startup parameters and judgment parameters of the two QUIC implementations, which are located in the start and judge directories of the main program project. You need to replace the parameters of the original `<program_name>.sh` file with the program path of the local machine, and modify the content of the ports file in the start directory, which describes the CPU resources and port information used by each QUIC implementation. 
 
 Run:`target/debug/network_quic_fuzz <procA> <procB>`
 
