@@ -129,10 +129,10 @@ cd $HOME/MerCuriuzz/vendors/
 
 git clone https://github.com/k4ra5u/LibAFL
 git clone --recursive https://github.com/k4ra5u/quiche
-unzip libnyx.zip
-unzip packer.zip
-unzip QEMU-Nyx.zip
-unzip libnyx.zip
+git clone https://github.com/k4ra5u/QEMU-Nyx
+git clone https://github.com/k4ra5u/packer
+git clone https://github.com/k4ra5u/libnyx
+mv LibAFL/libafl_nyx ./
 cd ../fuzzers/network_quic_fuzz
 export RUSTFLAGS="-C link-arg=-lstdc++"
 CARGO_TARGET_DIR=target  cargo build
