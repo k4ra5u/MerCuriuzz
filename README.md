@@ -2,7 +2,7 @@
 
 *MerCuriuzz* is a testing method capable of automatically discovering logical vulnerabilities in QUIC implementations.
 
-![Overview](./img/overview.png)
+![Overview](./img/overview.jpg)
 
 ## Usage
 
