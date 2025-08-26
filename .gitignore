@@ -86,7 +86,8 @@ record.pcap
 corpus*
 *.txt
 *.core
-vendors/*
+vendors/fuzzing_targets
+vendors/libafl_nyx
 slog
 *.bak
 *.crt

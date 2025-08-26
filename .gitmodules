@@ -1,0 +1,23 @@
+[submodule "vendors/LibAFL"]
+	path = vendors/LibAFL
+	url = https://github.com/k4ra5u/LibAFL.git
+
+[submodule "vendors/quiche"]
+	path = vendors/quiche
+	url = https://github.com/k4ra5u/quiche.git
+
+[submodule "vendors/QEMU-Nyx"]
+	path = vendors/QEMU-Nyx
+	url = https://github.com/k4ra5u/QEMU-Nyx.git
+
+[submodule "vendors/packer"]
+	path = vendors/packer
+	url = https://github.com/k4ra5u/packer.git
+
+[submodule "vendors/libnyx"]
+	path = vendors/libnyx
+	url = https://github.com/k4ra5u/libnyx.git
+
+
+
+
