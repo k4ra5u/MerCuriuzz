@@ -17,6 +17,7 @@ If you want to cite us, please use the following (BibTeX) reference:
 ```
 TBA
 ```
+We have also uploaded our artifacts to a DOI-providing platform. Here is our DOI link: `https://doi.org/10.5281/zenodo.17015304`
 
 ## Disclaimer
 
