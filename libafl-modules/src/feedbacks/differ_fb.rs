@@ -4,31 +4,37 @@ use std::io::Write;
 use std::mem;
 use std::process::Command;
 
+use crate::inputstruct::*;
+use crate::observers::*;
 use libafl::corpus::Testcase;
 use libafl::events::EventFirer;
 use libafl::inputs::HasMutatorBytes;
 use libafl::observers::ObserversTuple;
 use libafl::state::State;
 use libafl::HasMetadata;
+use libafl::{
+    executors::ExitKind, feedbacks::Feedback, inputs::UsesInput, observers::Observer,
+    state::UsesState,
+};
 use libafl_bolts::ownedref::OwnedMutPtr;
 use libafl_bolts::tuples::Handle;
 use libafl_bolts::tuples::Handled;
 use libafl_bolts::tuples::MatchNameRef;
-use libafl_bolts::{Error, Named,tuples::MatchName};
+use libafl_bolts::{tuples::MatchName, Error, Named};
 use log::error;
 use log::info;
 use log::warn;
-use serde::{Deserialize, Serialize};
-use libafl::{executors::ExitKind, inputs::UsesInput,observers::Observer, state::UsesState, feedbacks::Feedback};
 use quiche::{frame, packet, Connection, ConnectionId, Header};
-use crate::inputstruct::*;
-use crate::observers::*;
+use serde::{Deserialize, Serialize};
 
-pub fn cmp_ctrl_frames(a:Vec<Frame_info>,b:Vec<Frame_info>) -> bool {
+pub fn cmp_ctrl_frames(a: Vec<Frame_info>, b: Vec<Frame_info>) -> bool {
     for new_frame in b.iter() {
         let mut new_flag = false;
         for old_frame in a.iter() {
-            if mem::discriminant(&new_frame.frame) == mem::discriminant(&old_frame.frame) && new_frame.frame_num >10 && old_frame.frame_num > 10 {
+            if mem::discriminant(&new_frame.frame) == mem::discriminant(&old_frame.frame)
+                && new_frame.frame_num > 10
+                && old_frame.frame_num > 10
+            {
                 new_flag = true;
                 break;
             }
@@ -40,7 +46,10 @@ pub fn cmp_ctrl_frames(a:Vec<Frame_info>,b:Vec<Frame_info>) -> bool {
     for old_frame in a.iter() {
         let mut old_flag = false;
         for new_frame in b.iter() {
-            if mem::discriminant(&new_frame.frame) == mem::discriminant(&old_frame.frame) && new_frame.frame_num >10 && old_frame.frame_num > 10 {
+            if mem::discriminant(&new_frame.frame) == mem::discriminant(&old_frame.frame)
+                && new_frame.frame_num > 10
+                && old_frame.frame_num > 10
+            {
                 old_flag = true;
                 break;
             }
@@ -63,8 +72,7 @@ pub struct Deduplication {
     pub ack_state: ACKObserverState,
     pub exit_kind: ExitKind,
     pub ctrl_seq: Vec<Frame_info>,
-    pub match_nums:usize
-
+    pub match_nums: usize,
 }
 
 impl Deduplication {
@@ -86,14 +94,14 @@ impl Deduplication {
 }
 impl PartialEq for Deduplication {
     fn eq(&self, other: &Self) -> bool {
-        self.cc_time_state == other.cc_time_state &&
-        self.cpu_usage_state == other.cpu_usage_state &&
-        self.mem_state == other.mem_state &&
-        self.ctrl_state == other.ctrl_state &&
-        self.data_state == other.data_state &&
-        self.ack_state == other.ack_state &&
-        self.exit_kind == other.exit_kind &&
-        cmp_ctrl_frames(self.ctrl_seq.clone(),other.ctrl_seq.clone())
+        self.cc_time_state == other.cc_time_state
+            && self.cpu_usage_state == other.cpu_usage_state
+            && self.mem_state == other.mem_state
+            && self.ctrl_state == other.ctrl_state
+            && self.data_state == other.data_state
+            && self.ack_state == other.ack_state
+            && self.exit_kind == other.exit_kind
+            && cmp_ctrl_frames(self.ctrl_seq.clone(), other.ctrl_seq.clone())
     }
 }
 
@@ -107,11 +115,10 @@ pub struct DifferFeedback {
     diff_ack_ob_handle: Handle<DifferentialACKRangeObserver>,
     diff_pcap_ob_handle: Handle<DifferentialPcapObserver>,
     diff_misc_ob_handle: Handle<DifferentialMiscObserver>,
-    history_object:Vec<Deduplication>,
+    history_object: Vec<Deduplication>,
     pub srand_seed: u32,
     pub first_pcap: PcapRecord,
     pub second_pcap: PcapRecord,
-
 }
 
 impl<S> Feedback<S> for DifferFeedback
@@ -133,7 +140,7 @@ where
     {
         let diff_misc_ob = _observers.get(&self.diff_misc_ob_handle).unwrap();
         self.srand_seed = diff_misc_ob.srand_seed;
-        
+
         // let observer = _observers.get(&self.observer_handle).unwrap();
         let diff_cc_ob = _observers.get(&self.diff_cc_ob_handle).unwrap();
         let diff_cpu_ob = _observers.get(&self.diff_cpu_ob_handle).unwrap();
@@ -147,33 +154,42 @@ where
 
         let mut interesting_flag = false;
         let diff_cc_ob_judge_type = diff_cc_ob.judge_type();
-        if *diff_cc_ob_judge_type != CCTimesObserverState::OK && *diff_cc_ob_judge_type != CCTimesObserverState::MistypeCCReason && *diff_cc_ob_judge_type != CCTimesObserverState::MistypePkn {
-            warn!("vul of CC testcase: {:?}",diff_cc_ob_judge_type);
+        if *diff_cc_ob_judge_type != CCTimesObserverState::OK
+            && *diff_cc_ob_judge_type != CCTimesObserverState::MistypeCCReason
+            && *diff_cc_ob_judge_type != CCTimesObserverState::MistypePkn
+        {
+            warn!("vul of CC testcase: {:?}", diff_cc_ob_judge_type);
             interesting_flag = true;
         }
         if *diff_cpu_ob.judge_type() != CPUUsageObserverState::OK {
-            warn!("vul of CPU testcase: {:?}",diff_cpu_ob.judge_type());
+            warn!("vul of CPU testcase: {:?}", diff_cpu_ob.judge_type());
             interesting_flag = true;
         }
         if *diff_mem_ob.judge_type() != MemObserverState::OK {
-            warn!("vul of Mem testcase: {:?}",diff_mem_ob.judge_type());
+            warn!("vul of Mem testcase: {:?}", diff_mem_ob.judge_type());
             interesting_flag = true;
         }
         if *diff_ctrl_ob.judge_type() != CtrlObserverState::OK {
-            warn!("vul of Control Frame testcase: {:?}",diff_ctrl_ob.judge_type());
+            warn!(
+                "vul of Control Frame testcase: {:?}",
+                diff_ctrl_ob.judge_type()
+            );
             interesting_flag = true;
         }
         if *diff_data_ob.judge_type() != DataObserverState::OK {
-            warn!("vul of Data Frame testcase: {:?}",diff_data_ob.judge_type());
+            warn!(
+                "vul of Data Frame testcase: {:?}",
+                diff_data_ob.judge_type()
+            );
             interesting_flag = true;
         }
         if *diff_ack_ob.judge_type() != ACKObserverState::OK {
-            warn!("vul of ACK Range testcase: {:?}",diff_ack_ob.judge_type());
+            warn!("vul of ACK Range testcase: {:?}", diff_ack_ob.judge_type());
             interesting_flag = true;
         }
         let mut crash_flag = false;
         if _exit_kind != &ExitKind::Ok {
-            error!("vul of ExitKind testcase: {:?}",_exit_kind);
+            error!("vul of ExitKind testcase: {:?}", _exit_kind);
             crash_flag = true;
             interesting_flag = true;
         }
@@ -197,8 +213,7 @@ where
                             return Ok(true);
                         }
                         return Ok(false);
-                    }
-                    else {
+                    } else {
                         old_object.match_nums += 1;
                         error!("Deduplicate but interesting testcase");
                         return Ok(true);
@@ -226,12 +241,18 @@ where
         OT: ObserversTuple<S>,
         EM: EventFirer<State = S>,
     {
-        let new_Path = format!("./crashes/seed_{:?}",self.srand_seed);
-        *testcase.file_path_mut()  = Some(std::path::PathBuf::from(new_Path.clone()));
-        info!("Stored input to disk:: {:?}",new_Path);
+        let new_Path = format!("./crashes/seed_{:?}", self.srand_seed);
+        *testcase.file_path_mut() = Some(std::path::PathBuf::from(new_Path.clone()));
+        info!("Stored input to disk:: {:?}", new_Path);
         // ./path/to/crashes/0fac37e6127023ae -> ./path/to/crashes/
-        let first_commend = format!("editcap -A {} -B {} record.pcap {}\n",self.first_pcap.start_time,self.first_pcap.end_time,self.first_pcap.name);
-        let second_commend = format!("editcap -A {} -B {} record.pcap {}\n",self.second_pcap.start_time,self.second_pcap.end_time,self.second_pcap.name);
+        let first_commend = format!(
+            "editcap -A {} -B {} record.pcap {}\n",
+            self.first_pcap.start_time, self.first_pcap.end_time, self.first_pcap.name
+        );
+        let second_commend = format!(
+            "editcap -A {} -B {} record.pcap {}\n",
+            self.second_pcap.start_time, self.second_pcap.end_time, self.second_pcap.name
+        );
 
         // write into dump_records.sh
         let mut file = std::fs::OpenOptions::new()
@@ -248,7 +269,6 @@ where
     /// Discard the stored metadata in case that the testcase is not added to the corpus
     #[inline]
     fn discard_metadata(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
-        
         // let _ = Command::new("sudo")
         // .arg("rm")
         // .arg("-f")
@@ -285,14 +305,15 @@ impl Named for DifferFeedback {
 impl DifferFeedback {
     /// Creates a new [`DifferFeedback`]
     #[must_use]
-    pub fn new(diff_cc_ob: &DifferentialCCTimesObserver,
-                diff_cpu_ob: &DifferentialCPUUsageObserver,
-                diff_mem_ob: &DifferentialMemObserver,
-                diff_ctrl_ob: &DifferentialRecvControlFrameObserver,
-                diff_data_ob: &DifferentialRecvDataFrameObserver,
-                diff_ack_ob: &DifferentialACKRangeObserver,
-                diff_pcap_ob: &DifferentialPcapObserver,
-                diff_misc_ob: &DifferentialMiscObserver,
+    pub fn new(
+        diff_cc_ob: &DifferentialCCTimesObserver,
+        diff_cpu_ob: &DifferentialCPUUsageObserver,
+        diff_mem_ob: &DifferentialMemObserver,
+        diff_ctrl_ob: &DifferentialRecvControlFrameObserver,
+        diff_data_ob: &DifferentialRecvDataFrameObserver,
+        diff_ack_ob: &DifferentialACKRangeObserver,
+        diff_pcap_ob: &DifferentialPcapObserver,
+        diff_misc_ob: &DifferentialMiscObserver,
     ) -> Self {
         Self {
             diff_cc_ob_handle: diff_cc_ob.handle(),
@@ -310,4 +331,3 @@ impl DifferFeedback {
         }
     }
 }
-

@@ -1,23 +1,26 @@
 use std::borrow::Cow;
 
+use crate::inputstruct::*;
+use crate::observers::*;
 use libafl::corpus::Testcase;
 use libafl::events::EventFirer;
 use libafl::inputs::HasMutatorBytes;
 use libafl::observers::ObserversTuple;
 use libafl::state::State;
 use libafl::HasMetadata;
+use libafl::{
+    executors::ExitKind, feedbacks::Feedback, inputs::UsesInput, observers::Observer,
+    state::UsesState,
+};
 use libafl_bolts::ownedref::OwnedMutPtr;
 use libafl_bolts::tuples::Handle;
 use libafl_bolts::tuples::Handled;
 use libafl_bolts::tuples::MatchNameRef;
-use libafl_bolts::{Error, Named,tuples::MatchName};
+use libafl_bolts::{tuples::MatchName, Error, Named};
 use log::info;
 use log::warn;
-use serde::{Deserialize, Serialize};
-use libafl::{executors::ExitKind, inputs::UsesInput,observers::Observer, state::UsesState, feedbacks::Feedback};
 use quiche::{frame, packet, Connection, ConnectionId, Header};
-use crate::inputstruct::*;
-use crate::observers::*;
+use serde::{Deserialize, Serialize};
 
 /// Nop feedback that annotates execution time in the new testcase, if any
 /// for this Feedback, the testcase is never interesting (use with an OR).
@@ -48,7 +51,9 @@ where
         let final_cpu_usage = observer.final_cpu_usage;
         let avg_cpu = observer.final_based_cpu_usage;
         warn!("CPUUsageFeedback: avg_cpu: {:.2}%", avg_cpu);
-        if (final_cpu_usage > observer.based_cpu_usage +50.0) || (avg_cpu > observer.based_cpu_usage + 50.0) {
+        if (final_cpu_usage > observer.based_cpu_usage + 50.0)
+            || (avg_cpu > observer.based_cpu_usage + 50.0)
+        {
             info!("CPUUsageFeedback: Interesting testcase");
             return Ok(true);
         }
@@ -84,4 +89,3 @@ impl CPUUsageFeedback {
         }
     }
 }
-

@@ -1,5 +1,18 @@
-use std::num::ParseIntError;
+use libafl::{
+    executors::{Executor, ExitKind, HasObservers},
+    inputs::HasTargetBytes,
+    observers::{
+        get_asan_runtime_flags_with_log_path, AsanBacktraceObserver, ObserversTuple, UsesObservers,
+    },
+    state::{HasExecutions, State, UsesState},
+};
+use libafl_bolts::{
+    shmem::{ShMem, ShMemProvider, UnixShMemProvider},
+    tuples::{Handle, Handled, MatchName, MatchNameRef, Prepend, RefIndexable},
+    AsSlice, AsSliceMut, Truncate,
+};
 use libc::ERA;
+use log::{debug, error, info};
 use nix::{
     sys::{
         select::{pselect, FdSet},
@@ -9,35 +22,23 @@ use nix::{
     },
     unistd::Pid,
 };
-use libafl::{
-    executors::{
-        Executor, ExitKind, HasObservers
-    }, 
-    inputs::HasTargetBytes, 
-    observers::{
-        ObserversTuple, UsesObservers, get_asan_runtime_flags_with_log_path, AsanBacktraceObserver
-    }, 
-    state::{
-        HasExecutions, State, UsesState
-    }
-};
-use libafl_bolts::{
-    tuples::{Handle, Handled,MatchName ,MatchNameRef, Prepend, RefIndexable},
-    shmem::{ShMem, ShMemProvider, UnixShMemProvider},
-    AsSlice, AsSliceMut, Truncate,
-};
-use std::net::{SocketAddr, ToSocketAddrs};
 use ring::rand::*;
-use log::{error, info,debug};
+use std::net::{SocketAddr, ToSocketAddrs};
+use std::num::ParseIntError;
 
-use quiche::{frame::{self, EcnCounts, MAX_STREAM_SIZE}, packet, ranges, stream, Connection, ConnectionId, Error, Header};
+use quiche::{
+    frame::{self, EcnCounts, MAX_STREAM_SIZE},
+    packet,
+    range_buf::RangeBuf,
+    ranges, stream, Connection, ConnectionId, Error, Header,
+};
 
 fn buf_to_bool(buf: &mut &[u8]) -> Result<bool, Error> {
     if buf.len() < 1 {
         return Err(Error::BufferTooShort);
     }
 
-    let num = buf[0] & 1 == 1 ;
+    let num = buf[0] & 1 == 1;
     *buf = &buf[1..];
     Ok(num)
 }
@@ -72,7 +73,6 @@ fn buf_to_u32(buf: &mut &[u8]) -> Result<u32, Error> {
     Ok(num)
 }
 
-
 pub fn buf_to_u62(buf: &mut &[u8]) -> Result<u64, Error> {
     if buf.len() < 8 {
         return Err(Error::BufferTooShort);
@@ -87,39 +87,33 @@ pub fn buf_to_u62(buf: &mut &[u8]) -> Result<u64, Error> {
     Ok(num)
 }
 
-
-pub fn padding(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
+pub fn padding(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
         frame_len = len;
-        
     }
     let frame = frame::Frame::Padding { len: frame_len };
-    
+
     Ok(frame)
 }
 
-
-pub fn ping(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn ping(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
         frame_len = len;
-        
     }
     let mtu_probe = Some(len);
-    let frame = frame::Frame::Ping { mtu_probe: mtu_probe };
+    let frame = frame::Frame::Ping {
+        mtu_probe: mtu_probe,
+    };
 
     Ok(frame)
 }
 
-
-pub fn ack(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn ack(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
         frame_len = len;
-        
     }
     let pos = 0;
     let mut ranges = ranges::RangeSet::default();
@@ -133,9 +127,9 @@ pub fn ack(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
     let use_ecn = buf_to_bool(buf)?;
     let ecn_counts = match use_ecn {
         true => Some(EcnCounts {
-            ect0_count: buf_to_u62(buf)? %10,
-            ect1_count: buf_to_u62(buf)? %10,
-            ecn_ce_count: buf_to_u62(buf)? %10,
+            ect0_count: buf_to_u62(buf)? % 10,
+            ect1_count: buf_to_u62(buf)? % 10,
+            ecn_ce_count: buf_to_u62(buf)? % 10,
         }),
         false => None,
     };
@@ -146,21 +140,18 @@ pub fn ack(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
         ecn_counts,
     };
     Ok(frame)
-
 }
 
-
-pub fn ack_ecn(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn ack_ecn(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
         frame_len = len;
     }
     let mut ranges = ranges::RangeSet::default();
-    let ranges_num = 10; 
+    let ranges_num = 10;
     for i in 0..ranges_num {
-        let start = 2*i;
-        let end = 2*i+1;
+        let start = 2 * i;
+        let end = 2 * i + 1;
         ranges.insert(start..end);
     }
 
@@ -178,9 +169,7 @@ pub fn ack_ecn(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
     Ok(frame)
 }
 
-
-pub fn reset_stream(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn reset_stream(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
         frame_len = len;
@@ -193,9 +182,7 @@ pub fn reset_stream(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
     Ok(frame)
 }
 
-
-pub fn stop_sending(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn stop_sending(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
         frame_len = len;
@@ -206,33 +193,27 @@ pub fn stop_sending(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
     };
 
     Ok(frame)
-
 }
 
-
-pub fn crypto(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn crypto(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
-        frame_len = len;  
+        frame_len = len;
     }
     let offset = buf_to_u62(buf)? % 3000;
     let fin_flag = buf_to_bool(buf)?;
     let data = buf;
     let frame = frame::Frame::Crypto {
-
-        data: stream::RangeBuf::from(data, offset, fin_flag),
+        data: RangeBuf::from(data, offset, fin_flag),
     };
 
     Ok(frame)
 }
 
-
-pub fn new_token(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn new_token(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
-        frame_len = len; 
+        frame_len = len;
     }
     // let frame = frame::Frame::NewToken {
     //     token: buf.to_vec(),
@@ -242,13 +223,10 @@ pub fn new_token(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
     Ok(frame)
 }
 
-
-pub fn stream(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn stream(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
         frame_len = len;
-        
     }
     let stream_id = (buf_to_u62(buf)? % 5) * 4;
     let offset = buf_to_u62(buf)? % 3000;
@@ -257,27 +235,24 @@ pub fn stream(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
 
     let frame = frame::Frame::Stream {
         stream_id,
-        data: stream::RangeBuf::from(data, offset, fin_flag),
+        data: RangeBuf::from(data, offset, fin_flag),
     };
 
     Ok(frame)
 }
 
-
-pub fn max_data(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn max_data(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
         frame_len = len;
-        
     }
-    let frame = frame::Frame::MaxData { max: buf_to_u62(buf)? %10000 };
+    let frame = frame::Frame::MaxData {
+        max: buf_to_u62(buf)? % 10000,
+    };
     Ok(frame)
 }
 
-
-pub fn max_stream_data(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn max_stream_data(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
         frame_len = len;
@@ -289,42 +264,40 @@ pub fn max_stream_data(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error>
     Ok(frame)
 }
 
-
-pub fn max_streams_bidi(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn max_streams_bidi(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
         frame_len = len;
     }
-    let frame = frame::Frame::MaxStreamsBidi { max: buf_to_u62(buf)? % 10000 };
+    let frame = frame::Frame::MaxStreamsBidi {
+        max: buf_to_u62(buf)? % 10000,
+    };
     Ok(frame)
 }
 
-
-pub fn max_streams_uni(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn max_streams_uni(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
         frame_len = len;
     }
-    let frame = frame::Frame::MaxStreamsUni { max: buf_to_u62(buf)? % 10000  };
+    let frame = frame::Frame::MaxStreamsUni {
+        max: buf_to_u62(buf)? % 10000,
+    };
     Ok(frame)
 }
 
-
-pub fn data_blocked(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn data_blocked(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
         frame_len = len;
     }
-    let frame = frame::Frame::DataBlocked { limit: buf_to_u62(buf)? % 10000};
+    let frame = frame::Frame::DataBlocked {
+        limit: buf_to_u62(buf)? % 10000,
+    };
     Ok(frame)
 }
 
-
-pub fn stream_data_blocked(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn stream_data_blocked(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
         frame_len = len;
@@ -336,28 +309,27 @@ pub fn stream_data_blocked(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Er
     Ok(frame)
 }
 
-
-pub fn streams_blocked_bidi(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn streams_blocked_bidi(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
         frame_len = len;
     }
-    let frame = frame::Frame::StreamsBlockedBidi { limit: buf_to_u62(buf)? % 10000 };
+    let frame = frame::Frame::StreamsBlockedBidi {
+        limit: buf_to_u62(buf)? % 10000,
+    };
     Ok(frame)
 }
 
-
-pub fn streams_blocked_uni(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn streams_blocked_uni(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
         frame_len = len;
     }
-    let frame = frame::Frame::StreamsBlockedUni { limit: buf_to_u62(buf)? % 10000 };
+    let frame = frame::Frame::StreamsBlockedUni {
+        limit: buf_to_u62(buf)? % 10000,
+    };
     Ok(frame)
 }
-
 
 pub fn new_connection_id(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
@@ -367,13 +339,13 @@ pub fn new_connection_id(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Er
     let seq_num = 4;
     let retire_prior_to = 3;
 
-    let conn_id_len = ((buf_to_u8(buf)?) % 10 + 1) as usize;    
+    let conn_id_len = ((buf_to_u8(buf)?) % 10 + 1) as usize;
     let conn_id = buf[0..conn_id_len].to_vec();
     *buf = &buf[conn_id_len..];
     let mut reset_token = [0u8; 16];
     reset_token.copy_from_slice(&buf[0..16]);
     *buf = &buf[16..];
-    
+
     let frame = frame::Frame::NewConnectionId {
         seq_num,
         retire_prior_to,
@@ -384,58 +356,48 @@ pub fn new_connection_id(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Er
     Ok(frame)
 }
 
-
-pub fn retire_connection_id(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn retire_connection_id(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
         frame_len = len;
     }
-    let frame = frame::Frame::RetireConnectionId { seq_num: buf_to_u62(buf)? % 10 };
+    let frame = frame::Frame::RetireConnectionId {
+        seq_num: buf_to_u62(buf)? % 10,
+    };
     Ok(frame)
 }
 
-
-pub fn path_challenge(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn path_challenge(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
         frame_len = len;
     }
     let mut data = [0u8; 8];
     data.copy_from_slice(&buf[0..8]);
-    let frame = frame::Frame::PathChallenge {
-        data,
-    };
+    let frame = frame::Frame::PathChallenge { data };
     Ok(frame)
 }
 
-
-pub fn path_response(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn path_response(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
         frame_len = len;
     }
     let mut data = [0u8; 8];
     data.copy_from_slice(&buf[0..8]);
-    let frame = frame::Frame::PathResponse {
-        data,
-    };
+    let frame = frame::Frame::PathResponse { data };
     Ok(frame)
 }
 
-
-pub fn connection_close(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn connection_close(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
         frame_len = len;
     }
-    let error_code = buf_to_u62(buf)?% 10000;
-    let frame_type = buf_to_u62(buf)?% 10000;
-    let reason_len = ((buf_to_u32(buf)?) %100000 )as usize;
-    let mut reason =Vec::new();
+    let error_code = buf_to_u62(buf)? % 10000;
+    let frame_type = buf_to_u62(buf)? % 10000;
+    let reason_len = ((buf_to_u32(buf)?) % 100000) as usize;
+    let mut reason = Vec::new();
     for i in 0..reason_len {
         reason.push(buf[i % buf.len()]);
     }
@@ -449,21 +411,19 @@ pub fn connection_close(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error
     Ok(frame)
 }
 
-
-pub fn application_close(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn application_close(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
         frame_len = len;
     }
-    let error_code = buf_to_u62(buf)?% 10000;
-    let reason_len = ((buf_to_u32(buf)?) %100000 )as usize;
-    let mut reason =Vec::new();
+    let error_code = buf_to_u62(buf)? % 10000;
+    let reason_len = ((buf_to_u32(buf)?) % 100000) as usize;
+    let mut reason = Vec::new();
     for i in 0..reason_len {
         reason.push(buf[i % buf.len()]);
     }
 
-    // let frame = frame::Frame::ApplicationClose{ 
+    // let frame = frame::Frame::ApplicationClose{
     //     error_code,
     //     reason,
     // };
@@ -472,20 +432,17 @@ pub fn application_close(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Erro
 }
 
 // client 不能发送 handshake done
-pub fn handshake_done(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn handshake_done(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
         frame_len = len;
     }
     // let frame = frame::Frame::HandshakeDone;
-    let frame = frame::Frame::Padding { len:100 };
+    let frame = frame::Frame::Padding { len: 100 };
     Ok(frame)
 }
 
-
-pub fn datagram(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    
+pub fn datagram(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
     let mut frame_len = buf.len();
     if frame_len > len {
         frame_len = len;
@@ -496,42 +453,41 @@ pub fn datagram(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
     Ok(frame)
 }
 
-pub fn other(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
-    let frame = frame::Frame::Others { data: buf.to_vec() }; 
+pub fn other(buf: &mut &[u8], len: usize) -> Result<frame::Frame, Error> {
+    let frame = frame::Frame::Others { data: buf.to_vec() };
     Ok(frame)
 }
-
 
 pub fn gen_quic_frame(buf: &mut &[u8]) -> Result<frame::Frame, Error> {
     let selector_frame = buf[0];
     let mut frame_buf = &buf[1..];
-    let len = frame_buf.len(); 
+    let len = frame_buf.len();
     match selector_frame {
-        0 => padding(&mut frame_buf,len),
-        1 => ping(&mut frame_buf,len),
-        2 => ack(&mut frame_buf,len),
-        3 => reset_stream(&mut frame_buf,len),
-        4 => stop_sending(&mut frame_buf,len),
-        5 => crypto(&mut frame_buf,len),
-        6 => new_token(&mut frame_buf,len),
-        7 => stream(&mut frame_buf,len),
-        8 => max_data(&mut frame_buf,len),
-        9 => max_stream_data(&mut frame_buf,len),
-        10 => max_streams_bidi(&mut frame_buf,len),
-        11 => max_streams_uni(&mut frame_buf,len),
-        12 => data_blocked(&mut frame_buf,len),
-        13 => stream_data_blocked(&mut frame_buf,len),
-        14 => streams_blocked_bidi(&mut frame_buf,len),
-        15 => streams_blocked_uni(&mut frame_buf,len),
-        16 => new_connection_id(&mut frame_buf,len),
-        17 => retire_connection_id(&mut frame_buf,len),
-        18 => path_challenge(&mut frame_buf,len),
-        19 => path_response(&mut frame_buf,len),
-        20 => connection_close(&mut frame_buf,len),
-        21 => application_close(&mut frame_buf,len),
-        22 => handshake_done(&mut frame_buf,len),
-        23 => datagram(&mut frame_buf,len),
-        24 => other(&mut frame_buf,len),
+        0 => padding(&mut frame_buf, len),
+        1 => ping(&mut frame_buf, len),
+        2 => ack(&mut frame_buf, len),
+        3 => reset_stream(&mut frame_buf, len),
+        4 => stop_sending(&mut frame_buf, len),
+        5 => crypto(&mut frame_buf, len),
+        6 => new_token(&mut frame_buf, len),
+        7 => stream(&mut frame_buf, len),
+        8 => max_data(&mut frame_buf, len),
+        9 => max_stream_data(&mut frame_buf, len),
+        10 => max_streams_bidi(&mut frame_buf, len),
+        11 => max_streams_uni(&mut frame_buf, len),
+        12 => data_blocked(&mut frame_buf, len),
+        13 => stream_data_blocked(&mut frame_buf, len),
+        14 => streams_blocked_bidi(&mut frame_buf, len),
+        15 => streams_blocked_uni(&mut frame_buf, len),
+        16 => new_connection_id(&mut frame_buf, len),
+        17 => retire_connection_id(&mut frame_buf, len),
+        18 => path_challenge(&mut frame_buf, len),
+        19 => path_response(&mut frame_buf, len),
+        20 => connection_close(&mut frame_buf, len),
+        21 => application_close(&mut frame_buf, len),
+        22 => handshake_done(&mut frame_buf, len),
+        23 => datagram(&mut frame_buf, len),
+        24 => other(&mut frame_buf, len),
         _ => Err(Error::BufferTooShort),
     }
 }

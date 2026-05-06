@@ -1,30 +1,33 @@
 pub mod quicmutator;
-use std::{ops::RangeBounds, vec::Splice, vec::Drain};
+use std::{ops::RangeBounds, vec::Drain, vec::Splice};
 
 pub use quicmutator::*;
 
-use libafl::inputs::bytes;
+pub mod h3mutator;
+pub use h3mutator::*;
+
 pub use bytes::BytesInput;
+use libafl::inputs::bytes;
 
-use libafl::inputs::encoded;
 pub use encoded::*;
+use libafl::inputs::encoded;
 
-use libafl::inputs::gramatron;
 pub use gramatron::*;
+use libafl::inputs::gramatron;
 
-use libafl::inputs::generalized;
 pub use generalized::*;
+use libafl::inputs::generalized;
 
-use libafl::inputs::bytessub;
 pub use bytessub::BytesSubInput;
+use libafl::inputs::bytessub;
 
 use libafl::mutators::mutations::{
-        BitFlipMutator, ByteAddMutator, ByteDecMutator, ByteFlipMutator, ByteIncMutator,
-        ByteInterestingMutator, ByteNegMutator, ByteRandMutator, BytesCopyMutator,
-        BytesDeleteMutator, BytesExpandMutator, BytesInsertCopyMutator, BytesInsertMutator,
-        BytesRandInsertMutator, BytesRandSetMutator, BytesSetMutator, BytesSwapMutator, DwordAddMutator,
-        DwordInterestingMutator, QwordAddMutator, WordAddMutator, WordInterestingMutator,
-    };
+    BitFlipMutator, ByteAddMutator, ByteDecMutator, ByteFlipMutator, ByteIncMutator,
+    ByteInterestingMutator, ByteNegMutator, ByteRandMutator, BytesCopyMutator, BytesDeleteMutator,
+    BytesExpandMutator, BytesInsertCopyMutator, BytesInsertMutator, BytesRandInsertMutator,
+    BytesRandSetMutator, BytesSetMutator, BytesSwapMutator, DwordAddMutator,
+    DwordInterestingMutator, QwordAddMutator, WordAddMutator, WordInterestingMutator,
+};
 
 macro_rules! random_input_from_sequence {
     ($rand:expr,$seq:expr) => {
@@ -89,11 +92,11 @@ macro_rules! swap_node {
     };
 }
 
+use crate::mutators::quicmutator::*;
 use libafl_bolts::bolts_prelude::{tuple_list, tuple_list_type};
 pub(crate) use random_input_from_corpus;
 pub(crate) use random_input_from_sequence;
 pub(crate) use swap_node;
-use crate::mutators::quicmutator::*;
 
 pub type QuicMutatorsTupleType = tuple_list_type!(
     // quic-level mutators
@@ -111,9 +114,6 @@ pub type QuicMutatorsTupleType = tuple_list_type!(
     QuicFrameAddH3POSTMutator,
     QuicFrameAddH3GETMutator,
     QuicFrameCopyItemMutator,
-
-
-
 );
 
 pub type NSMQuicMutatorsTupleType = tuple_list_type!(
@@ -126,6 +126,47 @@ pub type NSMQuicMutatorsTupleType = tuple_list_type!(
     QuicFrameItemNumMutator,
     QuicFrameItemStrLenMutator,
     QuicFrameItemStrContentMutator,
+);
+
+pub type H3MutatorsTupleType = tuple_list_type!(
+    H3SendRecvTimesMutator,
+    H3ResortMutator,
+    H3MethodMutator,
+    H3PathSegmentMutator,
+    H3PathByteMutator,
+    H3PathParamMutator,
+    H3HeaderPatternMutator,
+    H3HeaderAddRemoveMutator,
+    H3HeaderValueByteMutator,
+    H3HeaderNameByteMutator,
+    H3HeaderDuplicateMutator,
+    H3BodyUpdateMutator,
+    H3ContentLengthMismatchMutator,
+    H3DataFrameCountMutator,
+    H3ControlRepeatMutator,
+    H3ControlTimingMutator,
+    H3ControlAddMutator,
+    H3ControlRemoveMutator,
+    H3ControlNumericMutator,
+    H3ControlStringChangeMutator,
+    H3ControlStringLengthMutator,
+    H3QpackBlockedMutator,
+    H3QpackAmplifyMutator,
+    H3QpackStepCountMutator,
+    H3QpackEncoderInstructionMutator,
+    H3QpackDecoderInstructionMutator,
+    H3QpackHeaderBlockRepMutator,
+    H3QpackReferenceConsistencyMutator,
+    H3QpackInterleaveMutator,
+    H3QpackChunkingMutator,
+    H3QpackSettingsSyncMutator,
+    H3QpackBlockedLifecycleMutator,
+    H3QpackStreamTopologyMutator,
+    H3QpackRawCorruptionMutator,
+    H3QpackScenarioSeedMutator,
+    H3ActionAddMutator,
+    H3ActionRemoveMutator,
+    H3ActionContentMutator
 );
 
 pub type QuicBytesMutatorsTupleType = tuple_list_type!(
@@ -175,7 +216,6 @@ pub fn quic_mutations() -> QuicMutatorsTupleType {
     )
 }
 
-
 pub fn nsm_quic_mutations() -> NSMQuicMutatorsTupleType {
     tuple_list!(
         // QuicPktTypeMutator::new(),
@@ -186,6 +226,49 @@ pub fn nsm_quic_mutations() -> NSMQuicMutatorsTupleType {
         QuicFrameItemNumMutator::new(),
         QuicFrameItemStrLenMutator::new(),
         QuicFrameItemStrContentMutator::new(),
+    )
+}
+
+pub fn h3_mutations() -> H3MutatorsTupleType {
+    tuple_list!(
+        H3SendRecvTimesMutator::new(),
+        H3ResortMutator::new(),
+        H3MethodMutator::new(),
+        H3PathSegmentMutator::new(),
+        H3PathByteMutator::new(),
+        H3PathParamMutator::new(),
+        H3HeaderPatternMutator::new(),
+        H3HeaderAddRemoveMutator::new(),
+        H3HeaderValueByteMutator::new(),
+        H3HeaderNameByteMutator::new(),
+        H3HeaderDuplicateMutator::new(),
+        H3BodyUpdateMutator::new(),
+        H3ContentLengthMismatchMutator::new(),
+        H3DataFrameCountMutator::new(),
+        H3ControlRepeatMutator::new(),
+        H3ControlTimingMutator::new(),
+        H3ControlAddMutator::new(),
+        H3ControlRemoveMutator::new(),
+        H3ControlNumericMutator::new(),
+        H3ControlStringChangeMutator::new(),
+        H3ControlStringLengthMutator::new(),
+        H3QpackBlockedMutator::new(),
+        H3QpackAmplifyMutator::new(),
+        H3QpackStepCountMutator::new(),
+        H3QpackEncoderInstructionMutator::new(),
+        H3QpackDecoderInstructionMutator::new(),
+        H3QpackHeaderBlockRepMutator::new(),
+        H3QpackReferenceConsistencyMutator::new(),
+        H3QpackInterleaveMutator::new(),
+        H3QpackChunkingMutator::new(),
+        H3QpackSettingsSyncMutator::new(),
+        H3QpackBlockedLifecycleMutator::new(),
+        H3QpackStreamTopologyMutator::new(),
+        H3QpackRawCorruptionMutator::new(),
+        H3QpackScenarioSeedMutator::new(),
+        H3ActionAddMutator::new(),
+        H3ActionRemoveMutator::new(),
+        H3ActionContentMutator::new()
     )
 }
 

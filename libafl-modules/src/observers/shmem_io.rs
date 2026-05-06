@@ -1,28 +1,25 @@
+use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng};
 use std::borrow::Cow;
+use std::env;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::env;
-use rand::{thread_rng, Rng};
-use rand::distributions::Alphanumeric;
 
+use crate::inputstruct::*;
 use chrono::{DateTime, FixedOffset, TimeDelta, TimeZone, Utc};
 use libafl::inputs::HasMutatorBytes;
+use libafl::observers::{DifferentialObserver, Observer, ObserversTuple};
+use libafl::{executors::ExitKind, inputs::UsesInput, state::UsesState};
 use libafl_bolts::ownedref::OwnedMutPtr;
 use libafl_bolts::tuples::{Handle, Handled};
-use libafl_bolts::{Error, Named,tuples::MatchName,tuples::MatchNameRef};
+use libafl_bolts::{tuples::MatchName, tuples::MatchNameRef, Error, Named};
 use log::info;
-use serde::{Deserialize, Serialize};
-use libafl::{executors::ExitKind, inputs::UsesInput, state::UsesState};
 use quiche::{frame, packet, Connection, ConnectionId, Header};
-use libafl::{
-    observers::{DifferentialObserver, Observer, ObserversTuple},
-};
-use crate::inputstruct::*;
+use serde::{Deserialize, Serialize};
 
-
-const QUIC_SIZE: usize = 0x100000;//128MB
-const OB_RESPONSE_SIZE: usize = 0x100000;//16MB
-const MAP_SIZE: usize = 1048260; 
+const QUIC_SIZE: usize = 0x100000; //128MB
+const OB_RESPONSE_SIZE: usize = 0x100000; //16MB
+const MAP_SIZE: usize = 1048260;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ShmemIOObserver {
@@ -42,12 +39,12 @@ impl ShmemIOObserver {
     }
 
     pub fn io_shmem_ref(&self) -> &u8 {
-        unsafe{ &*(self.shmem_io_ptr.as_ref() ) }
+        unsafe { &*(self.shmem_io_ptr.as_ref()) }
         // unsafe { &(self.quic_response_ptr.as_ref() as *const u8)  }
     }
 
     pub fn io_shmem_mut(&mut self) -> &mut u8 {
-        unsafe { &mut *(self.shmem_io_ptr.as_mut() as *mut u8)}
+        unsafe { &mut *(self.shmem_io_ptr.as_mut() as *mut u8) }
     }
     pub fn clear(&mut self) {
         unsafe {
@@ -56,7 +53,11 @@ impl ShmemIOObserver {
     }
     pub fn write_bytes(&mut self, data: &[u8]) {
         unsafe {
-            std::ptr::copy_nonoverlapping(data.as_ptr(), (self.io_shmem_mut() as *mut u8).add(1), data.len());
+            std::ptr::copy_nonoverlapping(
+                data.as_ptr(),
+                (self.io_shmem_mut() as *mut u8).add(1),
+                data.len(),
+            );
         }
         *self.io_shmem_mut() = 1 as u8;
     }

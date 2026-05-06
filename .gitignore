@@ -29,6 +29,10 @@ cur_input
 .venv
 
 crashes
+crashes*
+*.csv
+core
+*.jsonl
 
 callgrind.out.*
 perf.data
@@ -43,7 +47,6 @@ test.dict
 fuzzer_*
 AFLplusplus
 test_*
-*_fuzzer
 *_harness
 
 # Ignore common dummy and logfiles
@@ -94,3 +97,5 @@ slog
 *.key
 *.pcap
 *corpus
+fuzzers/quic_feature_measure
+fuzzers/quic_pipeline_tui

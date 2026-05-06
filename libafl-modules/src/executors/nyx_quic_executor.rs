@@ -1,21 +1,23 @@
 // use std::{io::Write, process::exit};
 
 use libafl::{
-    corpus::Corpus, executors::{Executor, ExitKind, HasObservers}, inputs::{BytesInput, HasTargetBytes, UsesInput}, observers::{ObserversTuple, UsesObservers}, state::{HasCorpus, HasExecutions, HasRandSeed, HasSolutions, State, UsesState}
+    corpus::Corpus,
+    executors::{Executor, ExitKind, HasObservers},
+    inputs::{BytesInput, HasTargetBytes, UsesInput},
+    observers::{ObserversTuple, UsesObservers},
+    state::{HasCorpus, HasExecutions, HasRandSeed, HasSolutions, State, UsesState},
 };
 use libafl_bolts::{prelude::OwnedMutPtr, tuples::RefIndexable};
-use libafl_nyx::executor::NyxExecutor;
-use std::{
-    any::Any, env, ffi::{OsStr, OsString}, fs::File, io::{self, prelude::*, BufRead, ErrorKind, Read, Write}, os::{
-        fd::{AsRawFd, BorrowedFd},
-        unix::{io::RawFd, process::CommandExt},
-    }, path::Path, process::{Child, Command, Output, Stdio}, str, thread::sleep, time::Duration, vec
+use libafl_bolts::{
+    rands,
+    shmem::{ShMem, ShMemId, ShMemProvider, UnixShMemProvider},
+    tuples::{Handle, Handled, MatchName, MatchNameRef, Prepend},
+    AsSlice, AsSliceMut, Truncate,
 };
-use std::num::ParseIntError;
-use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng};
+use libafl_nyx::executor::NyxExecutor;
 use libc::{rand, srand, ETH_DATA_LEN};
 use libc::{CODA_SUPER_MAGIC, ERA};
+use log::{debug, error, info, warn};
 use nix::{
     sys::{
         select::{pselect, FdSet},
@@ -25,20 +27,47 @@ use nix::{
     },
     unistd::Pid,
 };
-use libafl_bolts::{
-    rands, shmem::{ShMem, ShMemId, ShMemProvider, UnixShMemProvider}, tuples::{Handle, Handled,MatchName ,MatchNameRef, Prepend}, AsSlice, AsSliceMut, Truncate
-};
-use std::net::{SocketAddr, ToSocketAddrs};
+use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng};
 use ring::rand::*;
-use log::{error, info,debug,warn};
+use std::net::{SocketAddr, ToSocketAddrs};
+use std::num::ParseIntError;
+use std::{
+    any::Any,
+    env,
+    ffi::{OsStr, OsString},
+    fs::File,
+    io::{self, prelude::*, BufRead, ErrorKind, Read, Write},
+    os::{
+        fd::{AsRawFd, BorrowedFd},
+        unix::{io::RawFd, process::CommandExt},
+    },
+    path::Path,
+    process::{Child, Command, Output, Stdio},
+    str,
+    thread::sleep,
+    time::Duration,
+    vec,
+};
 
-use quiche::{frame::{self, EcnCounts, Frame, MAX_STREAM_SIZE}, packet, ranges::{self, RangeSet}, stream, Connection, ConnectionId, Error, FrameWithPkn, Header};
+use quiche::{
+    frame::{self, EcnCounts, Frame, MAX_STREAM_SIZE},
+    packet,
+    ranges::{self, RangeSet},
+    stream, Connection, ConnectionId, Error, FrameWithPkn, Header,
+};
 
-use crate::inputstruct::{pkt_resort_type, quic_input::InputStruct_deserialize, FramesCycleStruct, InputStruct, QuicStruct};
-use crate::observers::*;
+use crate::inputstruct::{
+    pkt_resort_type, quic_input::InputStruct_deserialize, FramesCycleStruct, InputStruct,
+    QuicStruct,
+};
 use crate::misc::*;
+use crate::observers::*;
 
-pub fn start_harness_with_envs(command: &str, envs: Vec<(OsString, OsString)>) -> Result<Output, std::io::Error> {
+pub fn start_harness_with_envs(
+    command: &str,
+    envs: Vec<(OsString, OsString)>,
+) -> Result<Output, std::io::Error> {
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(command);
     for (key, value) in envs {
@@ -48,20 +77,19 @@ pub fn start_harness_with_envs(command: &str, envs: Vec<(OsString, OsString)>) -
 }
 
 /*
-    pub exit_kind: ExitKind,
-    pub normal_conn_ob: NormalConnObserver,
-    pub cc_time_ob: CCTimesObserver,
-    pub misc_ob: MiscObserver,
-    pub recv_pkt_num_ob: RecvPktNumObserver,
-    pub ack_range_ob: ACKRangeObserver,
-    pub control_frame_ob: RecvControlFrameObserver,
-    pub data_frame_ob: RecvDataFrameObserver,
-    pub cpu_usage_ob: CPUUsageObserver,
-    pub mem_usage_ob: MemObserver,
-    pub pcap_record_ob: PcapObserver,
-    pub ucb_ob: UCBObserver, */
-pub struct NyxQuicExecutor<OT, S>
-{
+pub exit_kind: ExitKind,
+pub normal_conn_ob: NormalConnObserver,
+pub cc_time_ob: CCTimesObserver,
+pub misc_ob: MiscObserver,
+pub recv_pkt_num_ob: RecvPktNumObserver,
+pub ack_range_ob: ACKRangeObserver,
+pub control_frame_ob: RecvControlFrameObserver,
+pub data_frame_ob: RecvDataFrameObserver,
+pub cpu_usage_ob: CPUUsageObserver,
+pub mem_usage_ob: MemObserver,
+pub pcap_record_ob: PcapObserver,
+pub ucb_ob: UCBObserver, */
+pub struct NyxQuicExecutor<OT, S> {
     pub frame_rand_seed: u32,
     pub remote_obs_data: Option<RemoteObsData>,
     pub normal_conn_ob_ref: Handle<NormalConnObserver>,
@@ -77,13 +105,13 @@ pub struct NyxQuicExecutor<OT, S>
     pub ucb_ob_ref: Handle<UCBObserver>,
     pub parent: NyxExecutor<S, OT>,
     pub quic_response: OwnedMutPtr<u8>,
-    pub is_first:bool,
+    pub is_first: bool,
 }
 
-impl<OT, S> NyxQuicExecutor<OT, S> 
-where 
-OT: ObserversTuple<S>,
-S: State, 
+impl<OT, S> NyxQuicExecutor<OT, S>
+where
+    OT: ObserversTuple<S>,
+    S: State,
 {
     pub fn new(
         normal_conn_ob_ref: Handle<NormalConnObserver>,
@@ -97,14 +125,14 @@ S: State,
         mem_usage_ob_ref: Handle<MemObserver>,
         pcap_record_ob_ref: Handle<PcapObserver>,
         ucb_ob_ref: Handle<UCBObserver>,
-        parent: NyxExecutor<S,OT>,
+        parent: NyxExecutor<S, OT>,
         // raw_quic_response: *mut u8,
-        is_first: bool
+        is_first: bool,
     ) -> Self {
-        let quic_response_buffer = parent.helper.quic_response_buffer;    
+        let quic_response_buffer = parent.helper.quic_response_buffer;
         Self {
-            frame_rand_seed:0,
-            remote_obs_data:None,
+            frame_rand_seed: 0,
+            remote_obs_data: None,
             normal_conn_ob_ref,
             cc_time_ob_ref,
             misc_ob_ref,
@@ -117,9 +145,8 @@ S: State,
             pcap_record_ob_ref,
             ucb_ob_ref,
             parent,
-            quic_response:OwnedMutPtr::Ptr(quic_response_buffer),
+            quic_response: OwnedMutPtr::Ptr(quic_response_buffer),
             is_first,
-
         }
     }
 
@@ -131,16 +158,15 @@ S: State,
     pub fn wait_for_quic_shm_res(&mut self) {
         while true {
             let res = self.quic_response.as_mut() as *mut u8;
-            if(unsafe { *res } == 1) {
+            if (unsafe { *res } == 1) {
                 unsafe { *res = 0 };
                 break;
-            }
-            else {
+            } else {
                 sleep(Duration::from_millis(100));
             }
         }
-    } 
-    
+    }
+
     pub fn sync_normal_conn_ob(&mut self, normal_conn_ob: &NormalConnObserver) {
         let normal_conn_handle = self.normal_conn_ob_ref.clone();
         let mut observers = self.observers_mut();
@@ -178,7 +204,6 @@ S: State,
             recv_pkt_num.recv_pkts = recv_pkt_num_ob.recv_pkts;
             recv_pkt_num.send_bytes = recv_pkt_num_ob.send_bytes;
             recv_pkt_num.recv_bytes = recv_pkt_num_ob.recv_bytes;
-
         }
     }
 
@@ -188,7 +213,6 @@ S: State,
         if let Some(ack_range) = observers.get_mut(&ack_range_handle) {
             ack_range.ack_ranges = ack_range_ob.ack_ranges.clone();
             ack_range.ack_ranges_nums = ack_range_ob.ack_ranges_nums;
-
         }
     }
 
@@ -208,7 +232,6 @@ S: State,
             data_frame.stream_frames_list = data_frame_ob.stream_frames_list.clone();
             data_frame.pr_frames_list = data_frame_ob.pr_frames_list.clone();
             data_frame.dgram_frames_list = data_frame_ob.dgram_frames_list.clone();
-
         }
     }
 
@@ -225,11 +248,7 @@ S: State,
         let mem_usage_handle = self.mem_usage_ob_ref.clone();
         let mut observers = self.observers_mut();
         if let Some(mem_usage) = observers.get_mut(&mem_usage_handle) {
-            mem_usage.initial_mem = mem_usage_ob.initial_mem;
-            mem_usage.allowed_mem = mem_usage_ob.allowed_mem;
-            mem_usage.before_mem = mem_usage_ob.before_mem;
-            mem_usage.after_mem = mem_usage_ob.after_mem;
-
+            mem_usage.sync_from(mem_usage_ob);
         }
     }
 
@@ -240,7 +259,6 @@ S: State,
         if let Some(pcap_record) = observers.get_mut(&pcap_record_handle) {
             pcap_record.new_record = pcap_record_ob.new_record.clone();
         }
-        
     }
 
     pub fn sync_ucb_ob(&mut self, ucb_ob: &UCBObserver) {
@@ -256,14 +274,11 @@ S: State,
             libafl_bolts::prelude::OwnedMutPtr::Ptr(p) => p.wrapping_add(1),
             _ => panic!("quic_response is not a valid pointer"),
         };
-        let obs_response = unsafe {
-            std::slice::from_raw_parts(raw_ptr, 0x100000)
-        };
-
+        let obs_response = unsafe { std::slice::from_raw_parts(raw_ptr, 0x100000) };
 
         let serde_obs_buf = obs_response.as_slice();
         let obs_data = bincode::deserialize::<RemoteObsData>(&serde_obs_buf).unwrap();
-        info!("recive obs_data: \n{:?}\n\n",obs_data);
+        info!("recive obs_data: \n{:?}\n\n", obs_data);
         self.sync_normal_conn_ob(&obs_data.normal_conn_ob);
         self.sync_cc_time_ob(&obs_data.cc_time_ob);
         self.sync_misc_ob(&obs_data.misc_ob);
@@ -276,16 +291,12 @@ S: State,
         self.sync_pcap_record_ob(&obs_data.pcap_record_ob);
         self.sync_ucb_ob(&obs_data.ucb_ob);
         obs_data.exit_kind
-
     }
-
-
-
 }
 
 impl<OT, S> UsesState for NyxQuicExecutor<OT, S>
 where
-    S: State, 
+    S: State,
 {
     type State = S;
 }
@@ -315,10 +326,16 @@ where
 impl<EM, OT, S, Z> Executor<EM, Z> for NyxQuicExecutor<OT, S>
 where
     EM: UsesState<State = S>,
-    S: State + HasExecutions + HasCorpus + HasSolutions + HasRandSeed + UsesInput<Input=BytesInput>,
+    S: State
+        + HasExecutions
+        + HasCorpus
+        + HasSolutions
+        + HasRandSeed
+        + UsesInput<Input = BytesInput>,
     S::Input: HasTargetBytes,
     OT: MatchName + ObserversTuple<S>,
-    Z: UsesState<State = S> {
+    Z: UsesState<State = S>,
+{
     fn run_target(
         &mut self,
         _fuzzer: &mut Z,
@@ -326,33 +343,30 @@ where
         _mgr: &mut EM,
         input: &Self::Input,
     ) -> Result<libafl::prelude::ExitKind, libafl::prelude::Error> {
-
         if self.is_first {
-            self.frame_rand_seed = unsafe {rand().try_into().unwrap()};
+            self.frame_rand_seed = unsafe { rand().try_into().unwrap() };
             // info!("now {:?} corpus",state.corpus().count());
         }
         info!("running corpus: {:?}", state.corpus().current());
 
         *state.executions_mut() += 1;
 
-
         let binding: libafl_bolts::prelude::OwnedSlice<'_, u8> = input.target_bytes();
         let mut ori_input = binding.as_slice();
         // quic_shm_buf[1..9].copy_from_slice( &data.len().to_be_bytes());
         // quic_shm_buf[9..13].copy_from_slice(&seed.to_be_bytes());
         // quic_shm_buf[13..13+data.len()].copy_from_slice(data);
-        // quic_shm_buf[0] = 1; 
+        // quic_shm_buf[0] = 1;
         let input_len = ori_input.len();
         let total_size = 13 + input_len; // 根据你的需求计算总长度
         let mut new_input = vec![0; total_size]; // 初始化全 0 的向量
         new_input[0] = 1;
-        new_input[1..9].copy_from_slice( &input_len.to_be_bytes());
+        new_input[1..9].copy_from_slice(&input_len.to_be_bytes());
         new_input[9..13].copy_from_slice(&self.frame_rand_seed.to_be_bytes());
-        new_input[13..13+input_len].copy_from_slice(ori_input);
+        new_input[13..13 + input_len].copy_from_slice(ori_input);
         let mut NewInput = BytesInput::new(new_input);
         self.parent.run_target(_fuzzer, state, _mgr, &NewInput);
 
-        
         self.wait_for_quic_shm_res();
 
         /* Create pcap file if not exists */
@@ -362,10 +376,10 @@ where
         if !pcap_file_path.exists() {
             let mut file = File::create(pcap_file_path).expect("Failed to create pcap file");
             unsafe {
-                file.write_all(std::slice::from_raw_parts(pcap_recv, 0x100000)).expect("Failed to write pcap data");
+                file.write_all(std::slice::from_raw_parts(pcap_recv, 0x100000))
+                    .expect("Failed to write pcap data");
             }
         }
-
 
         let exit_kind = self.update_all_obs();
         Ok(exit_kind)

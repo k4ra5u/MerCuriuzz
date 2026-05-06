@@ -1,26 +1,23 @@
+use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng};
 use std::borrow::Cow;
+use std::env;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::env;
-use rand::{thread_rng, Rng};
-use rand::distributions::Alphanumeric;
 
+use crate::inputstruct::*;
 use chrono::{DateTime, FixedOffset, TimeDelta, TimeZone, Utc};
 use libafl::inputs::HasMutatorBytes;
+use libafl::observers::{DifferentialObserver, Observer, ObserversTuple};
+use libafl::{executors::ExitKind, inputs::UsesInput, state::UsesState};
 use libafl_bolts::ownedref::OwnedMutPtr;
 use libafl_bolts::tuples::{Handle, Handled};
-use libafl_bolts::{Error, Named,tuples::MatchName,tuples::MatchNameRef};
+use libafl_bolts::{tuples::MatchName, tuples::MatchNameRef, Error, Named};
 use log::info;
-use serde::{Deserialize, Serialize};
-use libafl::{executors::ExitKind, inputs::UsesInput, state::UsesState};
 use quiche::{frame, packet, Connection, ConnectionId, Header};
-use libafl::{
-    observers::{DifferentialObserver, Observer, ObserversTuple},
-};
-use crate::inputstruct::*;
+use serde::{Deserialize, Serialize};
 
 use super::HasRecordRemote;
-
 
 pub fn get_time_with_tshark_format() -> String {
     let dur = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
@@ -44,7 +41,7 @@ pub fn gen_pcap_path() -> String {
     format!("{}/{}.pcap", pcaps_dir, rand_str)
 }
 
-#[derive( Serialize, Deserialize,Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PcapRecord {
     pub start_time: String,
     pub end_time: String,
@@ -65,7 +62,7 @@ impl PcapRecord {
     }
 }
 
-#[derive( Serialize, Deserialize,Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PcapObserver {
     name: Cow<'static, str>,
     pub record_remote: bool,
@@ -80,12 +77,11 @@ impl PcapObserver {
         Self {
             name: Cow::from(name),
             record_remote: false,
-            port:0,
+            port: 0,
             new_record: PcapRecord::new(),
         }
     }
     pub fn pre_execv(&mut self) -> Result<(), Error> {
-
         if !self.record_remote() {
             // self.start_time = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3];
             self.new_record.start_time = get_time_with_tshark_format();
@@ -99,14 +95,10 @@ impl PcapObserver {
             // .expect("Failed to create empty pcap file");
         }
 
-
         Ok(())
     }
 
-    pub fn post_execv(
-        &mut self,
-        _exit_kind: &ExitKind,
-    ) -> Result<(), Error> {
+    pub fn post_execv(&mut self, _exit_kind: &ExitKind) -> Result<(), Error> {
         if !self.record_remote() {
             // info!("post_exec of PcapObserver: {:?}", self);
             self.new_record.end_time = get_time_with_tshark_format();
@@ -120,9 +112,7 @@ impl<S> Observer<S> for PcapObserver
 where
     S: UsesInput,
 {
-
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
-
         if !self.record_remote() {
             // self.start_time = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3];
             self.new_record.start_time = get_time_with_tshark_format();
@@ -135,7 +125,6 @@ where
             // .output() // 捕获 `touch` 的输出
             // .expect("Failed to create empty pcap file");
         }
-
 
         Ok(())
     }
@@ -161,11 +150,9 @@ impl Named for PcapObserver {
     }
 }
 
-
 #[allow(clippy::unsafe_derive_deserialize)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DifferentialPcapObserver {
-
     first_name: Cow<'static, str>,
     second_name: Cow<'static, str>,
     first_ob_ref: Handle<PcapObserver>,
@@ -179,10 +166,7 @@ pub struct DifferentialPcapObserver {
 
 impl DifferentialPcapObserver {
     /// Create a new `DifferentialPcapObserver`.
-    pub fn new (
-        first: &mut PcapObserver,
-        second: &mut PcapObserver,
-    ) -> Self {
+    pub fn new(first: &mut PcapObserver, second: &mut PcapObserver) -> Self {
         Self {
             first_name: first.name().clone(),
             second_name: second.name().clone(),
@@ -193,7 +177,6 @@ impl DifferentialPcapObserver {
             second_ob_ref: second.handle(),
             first_pcap_record: PcapRecord::new(),
             second_pcap_record: PcapRecord::new(),
-
         }
     }
 
@@ -205,14 +188,13 @@ impl DifferentialPcapObserver {
         &self.second_name
     }
 
-    pub fn perform_judge (&mut self) {
+    pub fn perform_judge(&mut self) {
         self.first_pcap_record = self.first_observer.new_record.clone();
         self.second_pcap_record = self.second_observer.new_record.clone();
         info!("Fir:{:?}", self.first_observer);
         info!("Sec:{:?}", self.second_observer);
         self.first_observer = PcapObserver::new("fake");
         self.second_observer = PcapObserver::new("fake");
-
     }
 }
 
@@ -224,8 +206,7 @@ impl Named for DifferentialPcapObserver {
 
 impl<S> Observer<S> for DifferentialPcapObserver where S: UsesInput {}
 
-impl< OTA, OTB, S> DifferentialObserver<OTA, OTB, S>
-    for DifferentialPcapObserver
+impl<OTA, OTB, S> DifferentialObserver<OTA, OTB, S> for DifferentialPcapObserver
 where
     OTA: ObserversTuple<S>,
     OTB: ObserversTuple<S>,

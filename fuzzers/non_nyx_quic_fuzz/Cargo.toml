@@ -33,3 +33,7 @@ mylibafl = { path = "../../libafl-modules/" }
 rand = "0.9.0-alpha.0"
 ring = "0.17"
 ctrlc = "3.1.0"
+
+[lib]
+name = "libafl_cc"
+crate-type = ["staticlib"]

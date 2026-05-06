@@ -1,14 +1,49 @@
-use std::time::{SystemTime, UNIX_EPOCH, Duration};
-use std::path::PathBuf;
-use std::{
-    any::Any, env, ffi::{OsStr, OsString}, fs::File, io::{self, prelude::*, BufRead, ErrorKind, Read, Write}, os::{
-        fd::{AsRawFd, BorrowedFd},
-        unix::{io::RawFd, process::CommandExt},
-    }, path::Path, process::{Child, Command, Output, Stdio}, str, thread::sleep, vec
-};
+use clap::Parser;
+use ctrlc;
 use libafl::prelude::MapObserver;
 use libafl::stages::{CalibrationStage, StdPowerMutationalStage};
+use libafl::{
+    corpus::{Corpus, InMemoryCorpus, OnDiskCorpus, Testcase},
+    events::SimpleEventManager,
+    executors::{forkserver::ForkserverExecutor, DiffExecutor, HasObservers},
+    feedback_and_fast, feedback_or,
+    feedbacks::{
+        differential::DiffResult, CrashFeedback, DiffFeedback, MaxMapFeedback, TimeFeedback,
+    },
+    fuzzer::{Fuzzer, StdFuzzer},
+    inputs::BytesInput,
+    monitors::SimpleMonitor,
+    mutators::{scheduled::havoc_mutations, tokens_mutations, StdScheduledMutator, Tokens},
+    observers::{
+        CanTrack, HitcountsIterableMapObserver, HitcountsMapObserver, MultiMapObserver,
+        StdMapObserver, TimeObserver,
+    },
+    prelude::ExplicitTracking,
+    schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
+    stages::mutational::StdMutationalStage,
+    state::{HasCorpus, StdState},
+    HasMetadata,
+};
+use libafl_bolts::ownedref::OwnedMutSlice;
+use libafl_bolts::{
+    current_nanos,
+    rands::StdRand,
+    shmem::{ShMem, ShMemProvider, StdShMemProvider, UnixShMem, UnixShMemProvider},
+    tuples::{tuple_list, Handled, MatchNameRef, Merge},
+    AsSliceMut, Truncate,
+};
+use libafl_nyx::executor::NyxExecutorBuilder;
+use libafl_nyx::helper::NyxHelper;
+use libafl_nyx::settings::NyxSettings;
+use libafl_targets::{edges_max_num, DifferentialAFLMapSwapObserver};
+use log::{debug, error, info, warn};
 use mylibafl::executors::NyxQuicExecutor;
+use mylibafl::{
+    executors::NetworkRestartExecutor, feedbacks::*, inputstruct::QuicStruct,
+    mutators::quic_mutations, observers::*, schedulers::MCTSScheduler,
+};
+use nix::libc::srand;
+use nix::libc::{rand, seccomp_notif_addfd, suseconds_t};
 use nix::sys::signal::sigprocmask;
 use nix::{
     sys::{
@@ -19,31 +54,25 @@ use nix::{
     },
     unistd::Pid,
 };
-use clap::Parser;
-use libafl::{
-    corpus::{Corpus, InMemoryCorpus, OnDiskCorpus, Testcase}, events::SimpleEventManager, executors::{forkserver::ForkserverExecutor, DiffExecutor, HasObservers}, feedback_and_fast, feedback_or, feedbacks::{differential::DiffResult, CrashFeedback, DiffFeedback, MaxMapFeedback, TimeFeedback}, fuzzer::{Fuzzer, StdFuzzer}, inputs::BytesInput, monitors::SimpleMonitor, mutators::{scheduled::havoc_mutations, tokens_mutations, StdScheduledMutator, Tokens}, observers::{CanTrack, HitcountsIterableMapObserver, HitcountsMapObserver, MultiMapObserver, StdMapObserver, TimeObserver}, prelude::ExplicitTracking, schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler}, stages::mutational::StdMutationalStage, state::{HasCorpus, StdState}, HasMetadata
-};
-use libafl_bolts::ownedref::OwnedMutSlice;
-use libafl_bolts::{
-    current_nanos,
-    rands::StdRand,
-    shmem::{ShMem, ShMemProvider, UnixShMemProvider, StdShMemProvider, UnixShMem},
-    tuples::{tuple_list, Handled, MatchNameRef, Merge},
-    AsSliceMut, Truncate,
-};
-use nix::libc::{rand, seccomp_notif_addfd, suseconds_t};
-use nix::{libc::srand};
 use rand::Rng;
-use mylibafl::{
-    executors::NetworkRestartExecutor, feedbacks::*, inputstruct::QuicStruct, mutators::quic_mutations, observers::*, schedulers::MCTSScheduler
+use std::path::PathBuf;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    any::Any,
+    env,
+    ffi::{OsStr, OsString},
+    fs::File,
+    io::{self, prelude::*, BufRead, ErrorKind, Read, Write},
+    os::{
+        fd::{AsRawFd, BorrowedFd},
+        unix::{io::RawFd, process::CommandExt},
+    },
+    path::Path,
+    process::{Child, Command, Output, Stdio},
+    str,
+    thread::sleep,
+    vec,
 };
-use libafl_targets::{edges_max_num, DifferentialAFLMapSwapObserver};
-use log::{error, info,debug,warn};
-use ctrlc;
-use libafl_nyx::executor::NyxExecutorBuilder;
-use libafl_nyx::helper::NyxHelper;
-use libafl_nyx::settings::NyxSettings;
-
 
 /// The commandline args this fuzzer accepts
 #[derive(Debug, Parser)]
@@ -53,20 +82,14 @@ use libafl_nyx::settings::NyxSettings;
     author = "tokatoka <tokazerkje@outlook.com>"
 )]
 struct Opt {
-
     #[arg(
         help = "first harness name",
         name = "first_name",
         default_value = "h2o"
-
     )]
     first_name: String,
 
-    #[arg(
-        help = "first conn port",
-        name = "first_port",
-        default_value = "58440"
-    )]
+    #[arg(help = "first conn port", name = "first_port", default_value = "58440")]
     first_port: u16,
 
     #[arg(
@@ -93,16 +116,13 @@ struct Opt {
     signal: Signal,
 }
 
-
-
 const start_dir: &str = "/tmp/quic-fuzzer-workspace/";
 #[allow(clippy::similar_names)]
 
-pub fn main( ) {
+pub fn main() {
     std::env::set_var("RUST_LOG", "info");
     env_logger::init();
     let opt = Opt::parse();
-
 
     let corpus_dirs: Vec<PathBuf> = vec![PathBuf::from("corpus-nor/")];
 
@@ -111,24 +131,37 @@ pub fn main( ) {
 
     let helper = (
         NyxHelper::new(
-            Path::new(&first_path), NyxSettings::builder().cpu_id(0).parent_cpu_id(None).build()).unwrap(),
-        NyxHelper::new(
-            Path::new(&second_path), NyxSettings::builder().cpu_id(0).parent_cpu_id(None).build()).unwrap(),
-    );
-    let map_observer = HitcountsIterableMapObserver::new(
-        MultiMapObserver::differential(
-            "combined-edges",
-            vec![
-                unsafe { OwnedMutSlice::from_raw_parts_mut(helper.0.bitmap_buffer, helper.0.bitmap_size) },
-                unsafe { OwnedMutSlice::from_raw_parts_mut(helper.1.bitmap_buffer, helper.1.bitmap_size) },
-            ],
+            Path::new(&first_path),
+            NyxSettings::builder().cpu_id(0).parent_cpu_id(None).build(),
         )
-    ).track_indices();
-
+        .unwrap(),
+        NyxHelper::new(
+            Path::new(&second_path),
+            NyxSettings::builder().cpu_id(0).parent_cpu_id(None).build(),
+        )
+        .unwrap(),
+    );
+    let map_observer = HitcountsIterableMapObserver::new(MultiMapObserver::differential(
+        "combined-edges",
+        vec![
+            unsafe {
+                OwnedMutSlice::from_raw_parts_mut(helper.0.bitmap_buffer, helper.0.bitmap_size)
+            },
+            unsafe {
+                OwnedMutSlice::from_raw_parts_mut(helper.1.bitmap_buffer, helper.1.bitmap_size)
+            },
+        ],
+    ))
+    .track_indices();
 
     let mut first_time_observer = TimeObserver::new("time");
     let mut first_recv_pkt_num_observer = RecvPktNumObserver::new("recv_pkt_num");
-    let mut first_conn_observer = NormalConnObserver::new("conn","127.0.0.1".to_owned(),opt.first_port,"myserver.xx".to_owned());
+    let mut first_conn_observer = NormalConnObserver::new(
+        "conn",
+        "127.0.0.1".to_owned(),
+        opt.first_port,
+        "myserver.xx".to_owned(),
+    );
     let mut first_cc_time_observer = CCTimesObserver::new("cc_time");
     let mut first_cpu_usage_observer = CPUUsageObserver::new("first_cpu_usage");
     let mut first_ctrl_observer = RecvControlFrameObserver::new("ctrl");
@@ -160,11 +193,14 @@ pub fn main( ) {
     first_misc_ob.set_record_remote(true);
     first_pcap_ob.set_record_remote(true);
 
-
-
     let mut second_time_observer = TimeObserver::new("time");
     let mut second_recv_pkt_num_observer = RecvPktNumObserver::new("recv_pkt_num");
-    let mut second_conn_observer = NormalConnObserver::new("conn","127.0.0.1".to_owned(),opt.second_port,"myserver.xx".to_owned());
+    let mut second_conn_observer = NormalConnObserver::new(
+        "conn",
+        "127.0.0.1".to_owned(),
+        opt.second_port,
+        "myserver.xx".to_owned(),
+    );
     let mut second_cc_time_observer = CCTimesObserver::new("cc_time");
     let mut second_cpu_usage_observer = CPUUsageObserver::new("second_cpu_usage");
     let mut second_ctrl_observer = RecvControlFrameObserver::new("ctrl");
@@ -195,38 +231,62 @@ pub fn main( ) {
     second_ucb_observer.set_record_remote(true);
     second_misc_ob.set_record_remote(true);
     second_pcap_ob.set_record_remote(true);
-    
 
-
-    let diff_cc_ob = DifferentialCCTimesObserver::new(&mut first_cc_time_observer, &mut second_cc_time_observer);
-    let diff_cpu_ob = DifferentialCPUUsageObserver::new(&mut first_cpu_usage_observer, &mut second_cpu_usage_observer);
-    let diff_ctrl_ob = DifferentialRecvControlFrameObserver::new(&mut first_ctrl_observer, &mut second_ctrl_observer);
-    let diff_data_ob = DifferentialRecvDataFrameObserver::new(&mut first_data_observer, &mut second_data_observer);
-    let diff_ack_ob = DifferentialACKRangeObserver::new(&mut first_ack_observer, &mut second_ack_observer);
-    let diff_mem_ob = DifferentialMemObserver::new(&mut first_mem_observer, &mut second_mem_observer);
+    let diff_cc_ob =
+        DifferentialCCTimesObserver::new(&mut first_cc_time_observer, &mut second_cc_time_observer);
+    let diff_cpu_ob = DifferentialCPUUsageObserver::new(
+        &mut first_cpu_usage_observer,
+        &mut second_cpu_usage_observer,
+    );
+    let diff_ctrl_ob = DifferentialRecvControlFrameObserver::new(
+        &mut first_ctrl_observer,
+        &mut second_ctrl_observer,
+    );
+    let diff_data_ob =
+        DifferentialRecvDataFrameObserver::new(&mut first_data_observer, &mut second_data_observer);
+    let diff_ack_ob =
+        DifferentialACKRangeObserver::new(&mut first_ack_observer, &mut second_ack_observer);
+    let diff_mem_ob =
+        DifferentialMemObserver::new(&mut first_mem_observer, &mut second_mem_observer);
     let diff_pcap_ob = DifferentialPcapObserver::new(&mut first_pcap_ob, &mut second_pcap_ob);
     let diff_misc_ob = DifferentialMiscObserver::new(&mut first_misc_ob, &mut second_misc_ob);
 
-    
-
-
-    let scheduler =  MCTSScheduler::new(&first_ucb_observer);
+    let scheduler = MCTSScheduler::new(&first_ucb_observer);
     let first_normal_conn_fb = NormalConnFeedback::new(&first_conn_observer);
     let second_normal_conn_fb = NormalConnFeedback::new(&second_conn_observer);
 
-
     let mut feedback = feedback_or!(
-        UCBFeedback::new(&first_ucb_observer,&first_cpu_usage_observer,&first_mem_observer,&first_cc_time_observer,&first_recv_pkt_num_observer,&first_ack_observer,&first_ctrl_observer,&first_data_observer),
-        UCBFeedback::new(&second_ucb_observer,&second_cpu_usage_observer,&second_mem_observer,&second_cc_time_observer,&second_recv_pkt_num_observer,&second_ack_observer,&second_ctrl_observer,&second_data_observer),
+        UCBFeedback::new(
+            &first_ucb_observer,
+            &first_cpu_usage_observer,
+            &first_mem_observer,
+            &first_cc_time_observer,
+            &first_recv_pkt_num_observer
+        ),
+        UCBFeedback::new(
+            &second_ucb_observer,
+            &second_cpu_usage_observer,
+            &second_mem_observer,
+            &second_cc_time_observer,
+            &second_recv_pkt_num_observer
+        ),
         MaxMapFeedback::new(&map_observer),
-        
-    );    
+    );
     let mut objective = feedback_or!(
         CrashFeedback::new(),
-        DifferFeedback::new(&diff_cc_ob, &diff_cpu_ob, &diff_mem_ob, &diff_ctrl_ob, &diff_data_ob, &diff_ack_ob,&diff_pcap_ob,&diff_misc_ob),
+        DifferFeedback::new(
+            &diff_cc_ob,
+            &diff_cpu_ob,
+            &diff_mem_ob,
+            &diff_ctrl_ob,
+            &diff_data_ob,
+            &diff_ack_ob,
+            &diff_pcap_ob,
+            &diff_misc_ob
+        ),
         first_normal_conn_fb,
         second_normal_conn_fb,
-    ); 
+    );
 
     let mut state = StdState::new(
         StdRand::with_seed(0),
@@ -237,10 +297,12 @@ pub fn main( ) {
     )
     .unwrap();
 
-    let monitor = SimpleMonitor::with_user_monitor(|s| { println!("{s}\n"); });
+    let monitor = SimpleMonitor::with_user_monitor(|s| {
+        println!("{s}\n");
+    });
     let mut mgr = SimpleEventManager::new(monitor);
 
-    let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);  
+    let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
 
     let first_observers = tuple_list!(
         first_time_observer,
@@ -255,7 +317,7 @@ pub fn main( ) {
         first_mem_observer,
         first_misc_ob,
         first_pcap_ob,
-        );
+    );
 
     let second_observers = tuple_list!(
         second_time_observer,
@@ -270,7 +332,7 @@ pub fn main( ) {
         second_mem_observer,
         second_misc_ob,
         second_pcap_ob,
-        );
+    );
     let diff_observers = tuple_list!(
         diff_cc_ob,
         diff_cpu_ob,
@@ -299,12 +361,9 @@ pub fn main( ) {
         first_pcap_ob_ref,
         first_ucb_observer_ref,
         NyxExecutorBuilder::new().build(helper.0, first_observers),
-        true
-
-
-
+        true,
     )
-        .set_frame_seed(frame_rand_seed);
+    .set_frame_seed(frame_rand_seed);
 
     let mut second_executor = NyxQuicExecutor::new(
         second_conn_observer_ref,
@@ -319,22 +378,22 @@ pub fn main( ) {
         second_pcap_ob_ref,
         second_ucb_observer_ref,
         NyxExecutorBuilder::new().build(helper.1, second_observers),
-        false
+        false,
     )
     .set_frame_seed(frame_rand_seed);
 
-    let mut differential_executor = DiffExecutor::new(
-        first_executor,
-        second_executor,
-        diff_observers,
-    );   
-
-
+    let mut differential_executor =
+        DiffExecutor::new(first_executor, second_executor, diff_observers);
 
     if state.must_load_initial_inputs() {
         println!("Loading initial corpus from {:?}", &corpus_dirs);
         state
-            .load_initial_inputs(&mut fuzzer, &mut differential_executor, &mut mgr, &corpus_dirs)
+            .load_initial_inputs(
+                &mut fuzzer,
+                &mut differential_executor,
+                &mut mgr,
+                &corpus_dirs,
+            )
             .unwrap_or_else(|err| {
                 panic!(
                     "Failed to load initial corpus at {:?}: {:?}",
@@ -354,6 +413,11 @@ pub fn main( ) {
         // StdTMinMutationalStage::new(minimizer, factory, 128)
     );
     fuzzer
-        .fuzz_loop(&mut stages, &mut differential_executor, &mut state, &mut mgr)
+        .fuzz_loop(
+            &mut stages,
+            &mut differential_executor,
+            &mut state,
+            &mut mgr,
+        )
         .expect("Error in the fuzzing loop");
 }

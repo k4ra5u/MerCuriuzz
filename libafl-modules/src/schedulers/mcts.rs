@@ -1,46 +1,44 @@
 use std::borrow::Cow;
 
-use libafl::{corpus::Testcase, inputs::HasMutatorBytes, prelude::ObserversTuple, state::{HasRand, HasReward}};
+use libafl::{
+    corpus::Testcase,
+    inputs::HasMutatorBytes,
+    prelude::ObserversTuple,
+    state::{HasRand, HasReward},
+};
 use libafl_bolts::{
     ownedref::OwnedMutPtr,
     rands::Rand,
-    tuples::{Handle, Handled,MatchNameRef},
-    Named,
-    Error,
-    tuples::MatchName
+    tuples::MatchName,
+    tuples::{Handle, Handled, MatchNameRef},
+    Error, Named,
 };
 
+use crate::{inputstruct::*, observers::*};
+use libafl::{executors::ExitKind, inputs::UsesInput, observers::Observer, state::UsesState};
 use log::info;
 use mio::unix::pipe::new;
-use serde::{Deserialize, Serialize};
-use libafl::{executors::ExitKind, inputs::UsesInput,observers::Observer, state::UsesState};
 use quiche::{frame, packet, Connection, ConnectionId, Header};
-use crate::{
-    observers::*,
-    inputstruct::*
-};
+use serde::{Deserialize, Serialize};
 // use alloc::borrow::ToOwned;
 use core::marker::PhantomData;
+use hashbrown::HashMap;
 use libafl::{
     corpus::{Corpus, CorpusId, HasTestcase},
-    schedulers::{RemovableScheduler, Scheduler,AflScheduler},
+    schedulers::{AflScheduler, RemovableScheduler, Scheduler},
     state::{HasCorpus, State},
 };
-use hashbrown::HashMap;
-use std::rc::Rc;
 use std::cell::RefCell;
-
+use std::rc::Rc;
 
 /// The Metadata for `MCTSScheduler`
 #[cfg_attr(
     any(not(feature = "serdeany_autoreg"), miri),
     allow(clippy::unsafe_derive_deserialize)
 )] // for SerdeAny
+#[derive(Clone, Debug)]
 
-
-#[derive( Clone, Debug)]
-
-pub struct MCTSNode{
+pub struct MCTSNode {
     pub corpus_id: CorpusId,
     pub parent: Option<Rc<RefCell<MCTSNode>>>,
     pub children: Vec<Rc<RefCell<MCTSNode>>>,
@@ -62,16 +60,15 @@ impl MCTSNode {
         }))
     }
 
-    pub fn add_child(parent: &Rc<RefCell<Self>>,new_node:Rc<RefCell<MCTSNode>>,reward: f64) {        
+    pub fn add_child(parent: &Rc<RefCell<Self>>, new_node: Rc<RefCell<MCTSNode>>, reward: f64) {
         // let new_node = MCTSNode::new();
         new_node.borrow_mut().parent = Some(parent.clone());
         let new_node_clone = new_node.clone();
         parent.borrow_mut().children.push(new_node);
         new_node_clone.borrow_mut().backpropagate(reward);
-        
     }
 
-    pub fn set_parent(child: &Rc<RefCell<Self>>, parent:  &Rc<RefCell<MCTSNode>>) {
+    pub fn set_parent(child: &Rc<RefCell<Self>>, parent: &Rc<RefCell<MCTSNode>>) {
         child.borrow_mut().parent = Some(parent.clone());
         parent.borrow_mut().children.push(child.clone());
     }
@@ -81,18 +78,22 @@ impl MCTSNode {
         let parent = target.borrow().parent.as_ref().unwrap().clone();
 
         // 删除 parent.children 中的 target 元素
-        parent.borrow_mut().children.retain(|child| !Rc::ptr_eq(child, target));
+        parent
+            .borrow_mut()
+            .children
+            .retain(|child| !Rc::ptr_eq(child, target));
     }
 
     pub fn best_child(&self, c: f64) -> Option<Rc<RefCell<MCTSNode>>> {
-        self.children.iter()
+        self.children
+            .iter()
             .max_by(|a, b| {
                 let a_node = a.borrow();
                 let b_node = b.borrow();
 
-                let ucb1_a = a_node.reward / (a_node.visits as f64) 
+                let ucb1_a = a_node.reward / (a_node.visits as f64)
                     + c * ((self.visits as f64).ln() / (a_node.visits as f64)).sqrt();
-                let ucb1_b = b_node.reward / (b_node.visits as f64) 
+                let ucb1_b = b_node.reward / (b_node.visits as f64)
                     + c * ((self.visits as f64).ln() / (b_node.visits as f64)).sqrt();
 
                 ucb1_a.partial_cmp(&ucb1_b).unwrap()
@@ -105,14 +106,13 @@ impl MCTSNode {
         self.reward += reward;
     }
 
-    pub fn backpropagate(&mut self, reward: f64){
+    pub fn backpropagate(&mut self, reward: f64) {
         self.update(reward);
         if let Some(parent) = &self.parent {
             parent.borrow_mut().backpropagate(reward);
         }
     }
 }
-
 
 #[derive(Clone, Debug)]
 pub struct MCTSScheduler<S> {
@@ -137,19 +137,18 @@ where
             cur_select_node,
             observer_handle: observer.handle(),
             phantom: PhantomData,
-            evaluate_res: 0.0
+            evaluate_res: 0.0,
         }
     }
-    
+
     pub fn mcts_search_node(&mut self) {
         let mut node = self.root_node.clone();
 
         while !node.borrow().children.is_empty() {
-            let node_mut = node.borrow().best_child(1.414).unwrap(); 
+            let node_mut = node.borrow().best_child(1.414).unwrap();
             node = node_mut;
         }
         self.cur_select_node = node.clone();
-
     }
 
     pub fn observer_handle(&self) -> Handle<UCBObserver> {
@@ -164,7 +163,6 @@ where
     where
         OT: ObserversTuple<S>,
     {
-
         Ok(())
     }
 
@@ -176,16 +174,18 @@ where
                 print!("  ");
             }
             // 打印节点信息
-            println!("└─ corpus_id: {:?}, reward: {:?}, visits: {:?}", node_borrow.corpus_id, node_borrow.reward, node_borrow.visits);
+            println!(
+                "└─ corpus_id: {:?}, reward: {:?}, visits: {:?}",
+                node_borrow.corpus_id, node_borrow.reward, node_borrow.visits
+            );
             // 递归打印子节点
             for child in &node_borrow.children {
                 print_node(child, depth + 1);
             }
         }
-    
+
         print_node(&self.root_node, 0);
     }
-
 }
 
 impl<S> UsesState for MCTSScheduler<S>
@@ -197,7 +197,6 @@ where
 
 impl<S> RemovableScheduler for MCTSScheduler<S>
 where
-
     S: HasCorpus + HasRand + HasTestcase + HasReward + State,
 {
     /// This will *NOT* neutralize the effect of this removed testcase from the global data such as `SchedulerMetadata`
@@ -221,7 +220,6 @@ where
     }
 }
 
-
 impl<S> Scheduler for MCTSScheduler<S>
 where
     S: HasCorpus + HasRand + HasTestcase + HasReward + State,
@@ -241,8 +239,8 @@ where
         // let rand_0 = state.rand_mut().below(10000);
         // let rand_0_1 = rand_0 as f64 / 10000.0;
         // new_node.borrow_mut().reward = rand_0_1;
-        MCTSNode::add_child(&cur_node, new_node,self.evaluate_res);
-        info!("Add new node: {:?},reward:{:?}", id,self.evaluate_res);
+        MCTSNode::add_child(&cur_node, new_node, self.evaluate_res);
+        info!("Add new node: {:?},reward:{:?}", id, self.evaluate_res);
         // self.draw_mcts_tree();
         Ok(())
     }

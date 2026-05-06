@@ -1,5 +1,7 @@
 use std::borrow::Cow;
 
+use crate::inputstruct::*;
+use crate::observers::*;
 use libafl::corpus::Testcase;
 use libafl::events::EventFirer;
 use libafl::inputs::HasMutatorBytes;
@@ -7,18 +9,19 @@ use libafl::observers::ObserversTuple;
 use libafl::prelude::ObserverWithHashField;
 use libafl::state::State;
 use libafl::HasMetadata;
+use libafl::{
+    executors::ExitKind, feedbacks::Feedback, inputs::UsesInput, observers::Observer,
+    state::UsesState,
+};
 use libafl_bolts::ownedref::OwnedMutPtr;
 use libafl_bolts::tuples::Handle;
 use libafl_bolts::tuples::Handled;
 use libafl_bolts::tuples::MatchNameRef;
-use libafl_bolts::{Error, Named,tuples::MatchName};
+use libafl_bolts::{tuples::MatchName, Error, Named};
 use log::info;
 use log::warn;
-use serde::{Deserialize, Serialize};
-use libafl::{executors::ExitKind, inputs::UsesInput,observers::Observer, state::UsesState, feedbacks::Feedback};
 use quiche::{frame, packet, Connection, ConnectionId, Header};
-use crate::inputstruct::*;
-use crate::observers::*;
+use serde::{Deserialize, Serialize};
 
 /// Nop feedback that annotates execution time in the new testcase, if any
 /// for this Feedback, the testcase is never interesting (use with an OR).
@@ -46,10 +49,11 @@ where
         OT: ObserversTuple<S>,
     {
         let observer = _observers.get(&self.observer_handle).unwrap();
-        if observer.unable_to_connect == true 
-        || observer.pre_spend_time.as_secs() >= 5 
-        || observer.post_spend_time.as_secs() >= 5 {
-        // || observer.post_spend_time.as_nanos() / observer.pre_spend_time.as_nanos() > 50 {
+        if observer.unable_to_connect == true
+            || observer.pre_spend_time.as_secs() >= 5
+            || observer.post_spend_time.as_secs() >= 5
+        {
+            // || observer.post_spend_time.as_nanos() / observer.pre_spend_time.as_nanos() > 50 {
             warn!("NormalConnFeedback: Interesting testcase");
             return Ok(true);
         }
@@ -101,4 +105,3 @@ impl NormalConnFeedback {
         }
     }
 }
-

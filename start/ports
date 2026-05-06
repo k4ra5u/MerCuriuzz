@@ -1,0 +1,16 @@
+aioquic:        58443 72,73
+cf-quiche:      26443 64,65
+google-quiche:  26440 66,67
+h2o:            38440 62,63
+haproxy:        27440 70,71
+haskell-quic:   32443 44,45
+lsquic:         25443 60,61
+msquic:         58440 74,75
+neqo:           32440 46,47
+nginx:          30440 58,59
+ngtcp2:         30443 56,57
+picoquic:       28440 62,63
+quic-go:        27443 68,69
+quinn:          31440 50,51
+s2n-quic:       31443 48,49
+xquic:          28443 54,55

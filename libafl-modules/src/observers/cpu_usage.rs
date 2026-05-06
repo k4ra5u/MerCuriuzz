@@ -1,26 +1,23 @@
 use std::borrow::Cow;
-use std::path::absolute;
 use std::time::Duration;
 
-use libafl::inputs::HasMutatorBytes;
-use libafl_bolts::ownedref::OwnedMutPtr;
-use libafl_bolts::tuples::{Handle, Handled};
-use libafl_bolts::{Error, Named,tuples::MatchName,tuples::MatchNameRef};
-use libc::abs;
-use log::{debug, info};
-use serde::{Deserialize, Serialize};
-use libafl::{executors::ExitKind, inputs::UsesInput, state::UsesState};
-use libafl::{
-    observers::{DifferentialObserver, Observer, ObserversTuple},
-};
-use quiche::{frame, packet, Connection, ConnectionId, Header};
 use crate::inputstruct::*;
 use crate::misc::*;
+use libafl::inputs::HasMutatorBytes;
+use libafl::observers::{DifferentialObserver, Observer, ObserversTuple};
+use libafl::{executors::ExitKind, inputs::UsesInput, state::UsesState};
+use libafl_bolts::ownedref::OwnedMutPtr;
+use libafl_bolts::tuples::{Handle, Handled};
+use libafl_bolts::{tuples::MatchName, tuples::MatchNameRef, Error, Named};
+use libc::abs;
+use log::{debug, info};
+use quiche::{frame, packet, Connection, ConnectionId, Header};
+use serde::{Deserialize, Serialize};
 use std::thread::sleep;
 
 use super::HasRecordRemote;
 
-#[derive(Debug, Serialize, Deserialize,Clone,PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum CPUUsageObserverState {
     OK,
     FirstCPU,
@@ -28,7 +25,7 @@ pub enum CPUUsageObserverState {
     BothCPU,
 }
 
-#[derive( Serialize, Deserialize,Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CPUUsageObserver {
     pub name: Cow<'static, str>,
     pub record_remote: bool,
@@ -37,12 +34,10 @@ pub struct CPUUsageObserver {
     pub based_cpu_usage: f64,
     pub final_based_cpu_usage: f64,
     pub final_cpu_usage: f64,
-    pub prev_process_time: (u64,u64),
-    pub prev_cpu_times: Vec<(u64,u64)>,
+    pub prev_process_time: (u64, u64),
+    pub prev_cpu_times: Vec<(u64, u64)>,
     pub record_times: u64,
     pub record_cpu_usages: Vec<f64>,
-
-
 }
 
 impl CPUUsageObserver {
@@ -57,22 +52,21 @@ impl CPUUsageObserver {
             based_cpu_usage: 0.0,
             final_based_cpu_usage: 0.0,
             final_cpu_usage: 0.0,
-            prev_process_time: (0,0),
+            prev_process_time: (0, 0),
             prev_cpu_times: Vec::new(),
             record_times: 0,
             record_cpu_usages: Vec::new(),
-
         }
     }
 
-    pub fn get_cur_cpu_usage(&mut self) -> f64 {
+    pub fn try_get_cur_cpu_usage(&mut self) -> Option<f64> {
         // 获取初始的进程和指定CPU核心的时间
         let pid = self.pid;
         let cpu_ids = self.cpu_ids.clone();
 
         // 获取当前的进程和指定CPU核心的时间
-        let curr_process_time = get_process_cpu_time(pid).expect(&format!("Failed to get process CPU time:{}", pid));
-        let curr_cpu_times = get_cpu_time(&cpu_ids).expect("Failed to get CPU core times");
+        let curr_process_time = get_process_cpu_time(pid)?;
+        let curr_cpu_times = get_cpu_time(&cpu_ids)?;
 
         // 克隆 curr_cpu_times 以避免移动
         let curr_cpu_times_clone = curr_cpu_times.clone();
@@ -94,7 +88,17 @@ impl CPUUsageObserver {
             pid, cpu_ids, cpu_usage
         );
 
-        cpu_usage
+        Some(cpu_usage)
+    }
+
+    pub fn get_cur_cpu_usage(&mut self) -> f64 {
+        match self.try_get_cur_cpu_usage() {
+            Some(cpu_usage) => cpu_usage,
+            None => {
+                debug!("Failed to get current CPU usage for pid {}", self.pid);
+                0.0
+            }
+        }
     }
 
     pub fn get_cur_cpu_usage_imut(&self) -> f64 {
@@ -164,15 +168,13 @@ impl CPUUsageObserver {
         self.record_cpu_usages.push(record_cpu_usage);
     }
     pub fn record_cur_cpu_usage(&mut self) {
-        let cur_cpu_usage = self.get_cur_cpu_usage();
-        self.add_record_cpu_usage(cur_cpu_usage);
-        self.add_frame_record_times();
+        if let Some(cur_cpu_usage) = self.try_get_cur_cpu_usage() {
+            self.add_record_cpu_usage(cur_cpu_usage);
+            self.add_frame_record_times();
+        }
     }
     pub fn judge_proc_exist(&self) -> bool {
-        let pid = self.pid;
-        let ps_pid = format!("/proc/{}", pid);
-        let path = absolute(&ps_pid).unwrap();
-        path.exists()
+        self.pid != 0 && get_process_cpu_time(self.pid).is_some()
     }
 
     pub fn pre_execv(&mut self) -> Result<(), Error> {
@@ -186,10 +188,7 @@ impl CPUUsageObserver {
         Ok(())
     }
 
-    pub fn post_execv(
-        &mut self,
-        _exit_kind: &ExitKind,
-    ) -> Result<(), Error> {
+    pub fn post_execv(&mut self, _exit_kind: &ExitKind) -> Result<(), Error> {
         if !self.record_remote() {
             if !self.judge_proc_exist() {
                 self.set_final_based_cpu_usage(0.0);
@@ -198,7 +197,7 @@ impl CPUUsageObserver {
                 return Ok(());
             }
             let final_cpu_usage = self.get_cur_cpu_usage_imut();
-            if(final_cpu_usage == 0.0){
+            if (final_cpu_usage == 0.0) {
                 self.set_final_based_cpu_usage(0.0);
                 self.set_final_cpu_usage(0.0);
                 return Ok(());
@@ -214,17 +213,12 @@ impl CPUUsageObserver {
         }
         Ok(())
     }
-
-
-
-
 }
 
 impl<S> Observer<S> for CPUUsageObserver
 where
     S: UsesInput,
 {
-
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
         if !self.record_remote() {
             // self.cpu_ids = Vec::new();
@@ -275,7 +269,6 @@ impl Named for CPUUsageObserver {
 #[allow(clippy::unsafe_derive_deserialize)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DifferentialCPUUsageObserver {
-
     first_name: Cow<'static, str>,
     second_name: Cow<'static, str>,
     first_ob_ref: Handle<CPUUsageObserver>,
@@ -288,10 +281,7 @@ pub struct DifferentialCPUUsageObserver {
 
 impl DifferentialCPUUsageObserver {
     /// Create a new `DifferentialCPUUsageObserver`.
-    pub fn new (
-        first: &mut CPUUsageObserver,
-        second: &mut CPUUsageObserver,
-    ) -> Self {
+    pub fn new(first: &mut CPUUsageObserver, second: &mut CPUUsageObserver) -> Self {
         Self {
             first_name: first.name().clone(),
             second_name: second.name().clone(),
@@ -320,35 +310,38 @@ impl DifferentialCPUUsageObserver {
         if first_cpu_usage - self.first_observer.based_cpu_usage > 80.0 || first_cpu_usage > 95.0 {
             self.judge_type = CPUUsageObserverState::FirstCPU;
         }
-        if second_cpu_usage - self.second_observer.based_cpu_usage > 80.0 || second_cpu_usage > 95.0  {
+        if second_cpu_usage - self.second_observer.based_cpu_usage > 80.0 || second_cpu_usage > 95.0
+        {
             if self.judge_type == CPUUsageObserverState::FirstCPU {
                 self.judge_type = CPUUsageObserverState::BothCPU;
-            }
-            else {
+            } else {
                 self.judge_type = CPUUsageObserverState::SecondCPU;
             }
         }
         if first_cpu_usage > second_cpu_usage && first_cpu_usage - second_cpu_usage > 70.0 {
             if self.judge_type == CPUUsageObserverState::SecondCPU {
                 self.judge_type = CPUUsageObserverState::BothCPU;
-            }
-            else if self.judge_type == CPUUsageObserverState::OK {
+            } else if self.judge_type == CPUUsageObserverState::OK {
                 self.judge_type = CPUUsageObserverState::FirstCPU;
             }
         } else if second_cpu_usage > first_cpu_usage && second_cpu_usage - first_cpu_usage > 70.0 {
             if self.judge_type == CPUUsageObserverState::FirstCPU {
                 self.judge_type = CPUUsageObserverState::BothCPU;
-            }
-            else if self.judge_type == CPUUsageObserverState::OK {
+            } else if self.judge_type == CPUUsageObserverState::OK {
                 self.judge_type = CPUUsageObserverState::SecondCPU;
             }
-        } 
+        }
 
-        info!("{:?},{:?}", self.first_observer.name,self.first_observer.final_based_cpu_usage);
-        info!("{:?},{:?}", self.second_observer.name,self.second_observer.final_based_cpu_usage);
+        info!(
+            "{:?},{:?}",
+            self.first_observer.name, self.first_observer.final_based_cpu_usage
+        );
+        info!(
+            "{:?},{:?}",
+            self.second_observer.name, self.second_observer.final_based_cpu_usage
+        );
         self.first_observer = CPUUsageObserver::new("fake");
         self.second_observer = CPUUsageObserver::new("fake");
-
     }
 }
 
@@ -360,8 +353,7 @@ impl Named for DifferentialCPUUsageObserver {
 
 impl<S> Observer<S> for DifferentialCPUUsageObserver where S: UsesInput {}
 
-impl< OTA, OTB, S> DifferentialObserver<OTA, OTB, S>
-    for DifferentialCPUUsageObserver
+impl<OTA, OTB, S> DifferentialObserver<OTA, OTB, S> for DifferentialCPUUsageObserver
 where
     OTA: ObserversTuple<S>,
     OTB: ObserversTuple<S>,

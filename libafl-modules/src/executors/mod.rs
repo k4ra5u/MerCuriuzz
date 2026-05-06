@@ -9,3 +9,6 @@ pub use quic_executor::*;
 
 pub mod nyx_quic_executor;
 pub use nyx_quic_executor::*;
+
+pub mod h3_executor;
+pub use h3_executor::*;

@@ -1,0 +1,1 @@
+nohup taskset -c 66,67 /home/john/quic-fuzz/newest/google-quiche/bazel-bin/quiche/quic_server --port 26440  --quic_versions "h3"  --certificate_file /home/john/quic-fuzz/newest/google-quiche/bazel-bin/quiche/server.crt  --key_file /home/john/quic-fuzz/newest/google-quiche/bazel-bin/quiche/server.key >> google-quiche.txt 2>&1 &

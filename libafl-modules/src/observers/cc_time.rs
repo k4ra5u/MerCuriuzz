@@ -1,22 +1,20 @@
 use std::borrow::Cow;
 
+use crate::inputstruct::*;
 use libafl::inputs::HasMutatorBytes;
+use libafl::observers::{DifferentialObserver, Observer, ObserversTuple};
+use libafl::{executors::ExitKind, inputs::UsesInput, state::UsesState};
 use libafl_bolts::ownedref::OwnedMutPtr;
 use libafl_bolts::tuples::{Handle, Handled};
-use libafl_bolts::{Error, Named,tuples::MatchName,tuples::MatchNameRef};
+use libafl_bolts::{tuples::MatchName, tuples::MatchNameRef, Error, Named};
 use log::info;
 use num_traits::abs;
-use serde::{Deserialize, Serialize};
-use libafl::{executors::ExitKind, inputs::UsesInput, state::UsesState};
 use quiche::{frame, packet, Connection, ConnectionId, Header};
-use libafl::{
-    observers::{DifferentialObserver, Observer, ObserversTuple},
-};
-use crate::inputstruct::*;
+use serde::{Deserialize, Serialize};
 
 use super::HasRecordRemote;
 
-#[derive(Debug, Serialize,Clone, Deserialize,PartialEq)]
+#[derive(Debug, Serialize, Clone, Deserialize, PartialEq)]
 pub enum CCTimesObserverState {
     OK,
     FirstCC,
@@ -25,8 +23,7 @@ pub enum CCTimesObserverState {
     MistypeCCReason,
 }
 
-
-#[derive( Serialize, Deserialize,Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CCTimesObserver {
     name: Cow<'static, str>,
     pub record_remote: bool,
@@ -34,7 +31,6 @@ pub struct CCTimesObserver {
     pub error_code: u64,
     pub frame_type: u64,
     pub reason: String,
-
 }
 
 impl CCTimesObserver {
@@ -46,12 +42,12 @@ impl CCTimesObserver {
             record_remote: false,
             pkn: 0,
             error_code: 0,
-            frame_type : 0,
+            frame_type: 0,
             reason: String::new(),
         }
     }
     pub fn pre_execv(&mut self) -> Result<(), Error> {
-        if !self.record_remote(){
+        if !self.record_remote() {
             self.pkn = 0;
             self.error_code = 0;
             self.frame_type = 0;
@@ -61,23 +57,18 @@ impl CCTimesObserver {
         Ok(())
     }
 
-    pub fn post_execv(
-        &mut self,
-        _exit_kind: &ExitKind,
-    ) -> Result<(), Error> {
+    pub fn post_execv(&mut self, _exit_kind: &ExitKind) -> Result<(), Error> {
         // info!("post_exec of CCTimesObserver: {:?}", self);
         Ok(())
     }
-
 }
 
 impl<S> Observer<S> for CCTimesObserver
 where
     S: UsesInput,
 {
-
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
-        if !self.record_remote(){
+        if !self.record_remote() {
             self.pkn = 0;
             self.error_code = 0;
             self.frame_type = 0;
@@ -107,7 +98,6 @@ impl Named for CCTimesObserver {
 #[allow(clippy::unsafe_derive_deserialize)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DifferentialCCTimesObserver {
-
     first_name: Cow<'static, str>,
     second_name: Cow<'static, str>,
     first_ob_ref: Handle<CCTimesObserver>,
@@ -120,10 +110,7 @@ pub struct DifferentialCCTimesObserver {
 
 impl DifferentialCCTimesObserver {
     /// Create a new `DifferentialCCTimesObserver`.
-    pub fn new (
-        first: &mut CCTimesObserver,
-        second: &mut CCTimesObserver,
-    ) -> Self {
+    pub fn new(first: &mut CCTimesObserver, second: &mut CCTimesObserver) -> Self {
         Self {
             first_name: first.name().clone(),
             second_name: second.name().clone(),
@@ -147,8 +134,8 @@ impl DifferentialCCTimesObserver {
     pub fn judge_type(&self) -> &CCTimesObserverState {
         &self.judge_type
     }
-    pub fn perform_judge (&mut self) {
-        if self.first_observer.pkn ==0 && self.second_observer.pkn == 0 {
+    pub fn perform_judge(&mut self) {
+        if self.first_observer.pkn == 0 && self.second_observer.pkn == 0 {
             self.judge_type = CCTimesObserverState::OK;
         } else if self.first_observer.pkn == 0 && self.second_observer.pkn != 0 {
             self.judge_type = CCTimesObserverState::SecondCC;
@@ -157,7 +144,9 @@ impl DifferentialCCTimesObserver {
         } else if self.first_observer.pkn != 0 && self.second_observer.pkn != 0 {
             if abs(self.first_observer.pkn as i64 - self.second_observer.pkn as i64) > 100 {
                 self.judge_type = CCTimesObserverState::MistypePkn;
-            } else if self.first_observer.reason.len() != 0 && self.second_observer.reason.len() != 0 {
+            } else if self.first_observer.reason.len() != 0
+                && self.second_observer.reason.len() != 0
+            {
                 if self.first_observer.reason == self.second_observer.reason {
                     self.judge_type = CCTimesObserverState::OK;
                 } else {
@@ -165,7 +154,7 @@ impl DifferentialCCTimesObserver {
                 }
             } else {
                 self.judge_type = CCTimesObserverState::OK;
-            } 
+            }
         }
         info!("FirCCOb:{:?}", self.first_observer);
         info!("SecCCOb:{:?}", self.second_observer);
@@ -182,8 +171,7 @@ impl Named for DifferentialCCTimesObserver {
 
 impl<S> Observer<S> for DifferentialCCTimesObserver where S: UsesInput {}
 
-impl< OTA, OTB, S> DifferentialObserver<OTA, OTB, S>
-    for DifferentialCCTimesObserver
+impl<OTA, OTB, S> DifferentialObserver<OTA, OTB, S> for DifferentialCCTimesObserver
 where
     OTA: ObserversTuple<S>,
     OTB: ObserversTuple<S>,

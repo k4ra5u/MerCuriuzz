@@ -4,36 +4,38 @@ use std::sync::{Arc, Mutex};
 
 use std::process::Command;
 
+use crate::inputstruct::*;
+use crate::observers::PcapRecord;
+use crate::observers::*;
+use ctrlc;
 use libafl::corpus::Testcase;
 use libafl::events::EventFirer;
 use libafl::inputs::HasMutatorBytes;
 use libafl::observers::ObserversTuple;
 use libafl::state::State;
 use libafl::HasMetadata;
+use libafl::{
+    executors::ExitKind, feedbacks::Feedback, inputs::UsesInput, observers::Observer,
+    state::UsesState,
+};
 use libafl_bolts::ownedref::OwnedMutPtr;
 use libafl_bolts::tuples::Handle;
 use libafl_bolts::tuples::Handled;
 use libafl_bolts::tuples::MatchNameRef;
-use libafl_bolts::{Error, Named,tuples::MatchName};
+use libafl_bolts::{tuples::MatchName, Error, Named};
 use log::info;
 use log::warn;
-use serde::{Deserialize, Serialize};
-use libafl::{executors::ExitKind, inputs::UsesInput,observers::Observer, state::UsesState, feedbacks::Feedback};
 use quiche::{frame, packet, Connection, ConnectionId, Header};
-use crate::inputstruct::*;
-use crate::observers::*;
-use crate::observers::PcapRecord;
-use ctrlc;
+use serde::{Deserialize, Serialize};
 
 /// Nop feedback that annotates execution time in the new testcase, if any
 /// for this Feedback, the testcase is never interesting (use with an OR).
 /// It decides, if the given [`MiscObserver`] value of a run is interesting.
 
-
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MiscFeedback {
     observer_handle: Handle<MiscObserver>,
-    srand_seed:u32,
+    srand_seed: u32,
 }
 
 impl<S> Feedback<S> for MiscFeedback
@@ -71,7 +73,6 @@ where
         OT: ObserversTuple<S>,
         EM: EventFirer<State = S>,
     {
-
         Ok(())
     }
 
@@ -105,13 +106,11 @@ impl Named for MiscFeedback {
 impl MiscFeedback {
     /// Creates a new [`MiscFeedback`], deciding if the given [`MiscObserver`] value of a run is interesting.
     #[must_use]
-    pub fn new(observer: &MiscObserver) -> Self  {
+    pub fn new(observer: &MiscObserver) -> Self {
         let instance = Self {
             observer_handle: observer.handle(),
             srand_seed: 0,
         };
         instance
     }
-
 }
-

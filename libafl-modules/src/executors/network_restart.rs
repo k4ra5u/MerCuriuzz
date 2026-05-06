@@ -1,14 +1,24 @@
-use std::{
-    any::Any, env, ffi::{OsStr, OsString}, fs::File, io::{self, prelude::*, BufRead, ErrorKind, Read, Write}, os::{
-        fd::{AsRawFd, BorrowedFd},
-        unix::{io::RawFd, process::CommandExt},
-    }, path::Path, process::{Child, Command, Output, Stdio}, str, thread::sleep, time::Duration, vec
+use libafl::{
+    corpus::Corpus,
+    events::{Event, EventFirer},
+    executors::{Executor, ExitKind, HasObservers},
+    inputs::HasTargetBytes,
+    monitors::{AggregatorOps, UserStats, UserStatsValue},
+    observers::{
+        get_asan_runtime_flags_with_log_path, AsanBacktraceObserver, ObserversTuple, UsesObservers,
+    },
+    prelude::{HitcountsIterableMapObserver, MapObserver, MultiMapObserver},
+    state::{HasCorpus, HasExecutions, HasRandSeed, HasSolutions, State, UsesState},
 };
-use std::num::ParseIntError;
-use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng};
+use libafl_bolts::{
+    rands,
+    shmem::{ShMem, ShMemProvider, UnixShMemProvider},
+    tuples::{Handle, Handled, MatchName, MatchNameRef, Prepend, RefIndexable},
+    AsSlice, AsSliceMut, Truncate,
+};
 use libc::{rand, srand, ETH_DATA_LEN};
 use libc::{CODA_SUPER_MAGIC, ERA};
+use log::{debug, error, info, warn};
 use nix::{
     sys::{
         select::{pselect, FdSet},
@@ -18,27 +28,44 @@ use nix::{
     },
     unistd::Pid,
 };
-use libafl::{
-    corpus::Corpus, executors::{
-        Executor, ExitKind, HasObservers
-    }, inputs::HasTargetBytes, observers::{
-        get_asan_runtime_flags_with_log_path, AsanBacktraceObserver, ObserversTuple, UsesObservers
-    }, prelude::{HitcountsIterableMapObserver, MapObserver, MultiMapObserver}, state::{
-        HasCorpus, HasExecutions, HasRandSeed, HasSolutions, State, UsesState
-    }
-};
-use libafl_bolts::{
-    rands, shmem::{ShMem, ShMemProvider, UnixShMemProvider}, tuples::{Handle, Handled,MatchName ,MatchNameRef, Prepend, RefIndexable}, AsSlice, AsSliceMut, Truncate
-};
-use std::net::{SocketAddr, ToSocketAddrs};
+use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng};
 use ring::rand::*;
-use log::{error, info,debug,warn};
+use std::net::{SocketAddr, ToSocketAddrs};
+use std::num::ParseIntError;
+use std::{
+    any::Any,
+    borrow::Cow,
+    env,
+    ffi::{OsStr, OsString},
+    fs::File,
+    io::{self, prelude::*, BufRead, ErrorKind, Read, Write},
+    marker::PhantomData,
+    os::{
+        fd::{AsRawFd, BorrowedFd},
+        unix::{io::RawFd, process::CommandExt},
+    },
+    path::Path,
+    process::{Child, Command, Output, Stdio},
+    str,
+    thread::sleep,
+    time::Duration,
+    vec,
+};
 
-use quiche::{frame::{self, EcnCounts, Frame, MAX_STREAM_SIZE}, packet, ranges::{self, RangeSet}, stream, Connection, ConnectionId, Error, FrameWithPkn, Header};
+use quiche::{
+    frame::{self, EcnCounts, Frame, MAX_STREAM_SIZE},
+    packet,
+    ranges::{self, RangeSet},
+    stream, Connection, ConnectionId, Error, FrameWithPkn, Header,
+};
 
-use crate::inputstruct::{pkt_resort_type, quic_input::InputStruct_deserialize, FramesCycleStruct, InputStruct, QuicStruct};
-use crate::observers::*;
+use crate::inputstruct::{
+    pkt_resort_type, quic_input::InputStruct_deserialize, FramesCycleStruct, InputStruct,
+    QuicStruct,
+};
 use crate::misc::*;
+use crate::observers::*;
 
 //use crate::QuicStruct;
 // use quic_input::{FramesCycleStruct, InputStruct, pkt_resort_type, QuicStruct};
@@ -49,8 +76,10 @@ const HTTP_REQ_STREAM_ID: u64 = 4;
 
 /// For experiment only, please use `STNyxExecutor` in production.
 
-
-fn start_harness_with_envs(command: &str, envs: Vec<(OsString, OsString)>) -> Result<Output, std::io::Error> {
+fn start_harness_with_envs(
+    command: &str,
+    envs: Vec<(OsString, OsString)>,
+) -> Result<Output, std::io::Error> {
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(command);
     for (key, value) in envs {
@@ -60,7 +89,8 @@ fn start_harness_with_envs(command: &str, envs: Vec<(OsString, OsString)>) -> Re
 }
 
 pub struct NetworkRestartExecutor<OT, S, SP>
-where SP: ShMemProvider,
+where
+    SP: ShMemProvider,
 {
     pub start_command: String,
     pub judge_command: String,
@@ -87,8 +117,9 @@ where SP: ShMemProvider,
     pub coverage_map2: Vec<bool>,
 }
 
-pub struct NetworkRestartExecutorBuilder<'a,SP>
-where SP: ShMemProvider,
+pub struct NetworkRestartExecutorBuilder<'a, SP>
+where
+    SP: ShMemProvider,
 {
     start_command: String,
     judge_command: String,
@@ -106,7 +137,6 @@ where SP: ShMemProvider,
     frame_rand_seed: u64,
 }
 
-
 // impl NetworkRestartExecutor<(), (), UnixShMemProvider> {
 //     /// Builder for `NetworkRestartExecutor`
 //     #[must_use]
@@ -115,52 +145,51 @@ where SP: ShMemProvider,
 //     }
 // }
 
-impl<OT, S,SP> NetworkRestartExecutor<OT, S,SP> 
-where 
-OT: ObserversTuple<S>,
-S: State, 
-SP: ShMemProvider,
+impl<OT, S, SP> NetworkRestartExecutor<OT, S, SP>
+where
+    OT: ObserversTuple<S>,
+    S: State,
+    SP: ShMemProvider,
 {
-    pub fn new(observers: OT,shmem_provider:SP) -> Self {
+    pub fn new(observers: OT, shmem_provider: SP) -> Self {
         Self {
             start_command: "".to_owned(),
             judge_command: "".to_owned(),
-            is_first:false,
+            is_first: false,
             envs: vec![],
             port: 80,
             timeout: Duration::from_millis(100),
             observers,
             phantom: std::marker::PhantomData,
-            map:None,
-            map_size:None,
-            kill_signal:None,
-            asan_obs:None,
-            crash_exitcode:None,
+            map: None,
+            map_size: None,
+            kill_signal: None,
+            asan_obs: None,
+            crash_exitcode: None,
             shmem_provider,
-            pid:0,
-            quic_shm_id:String::new() ,
-            quic_shm_size:0,
-            quic_st:None,
-            recv_pkts:0,
-            non_res_times:0,
-            frame_rand_seed:0,
+            pid: 0,
+            quic_shm_id: String::new(),
+            quic_shm_size: 0,
+            quic_st: None,
+            recv_pkts: 0,
+            non_res_times: 0,
+            frame_rand_seed: 0,
             coverage_map1: vec![false; MAP_SIZE],
             coverage_map2: vec![false; MAP_SIZE],
         }
     }
 
-    pub fn start_command(mut self,str:String) -> Self {
+    pub fn start_command(mut self, str: String) -> Self {
         let base_dir = env::var("START_DIR").unwrap();
         self.start_command = format!("{base_dir}/{str}.sh");
-        info!("start_command: {:?}",self.start_command);
+        info!("start_command: {:?}", self.start_command);
         self
-
     }
 
-    pub fn judge_command(mut self,str:String) -> Self {
+    pub fn judge_command(mut self, str: String) -> Self {
         let base_dir = env::var("JUDGE_DIR").unwrap();
         self.judge_command = format!("{base_dir}/{str}-judge.sh");
-        info!("judge_command: {:?}",self.judge_command);
+        info!("judge_command: {:?}", self.judge_command);
         self
     }
 
@@ -168,12 +197,12 @@ SP: ShMemProvider,
         self.is_first = true;
         self
     }
-    pub fn port(mut self,port:u16) -> Self {
+    pub fn port(mut self, port: u16) -> Self {
         self.port = port;
         self
     }
 
-    pub fn timeout(mut self,timeout:Duration) -> Self {
+    pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
@@ -187,11 +216,11 @@ SP: ShMemProvider,
         self.frame_rand_seed = seed;
         self
     }
-    pub fn change_recv_pkts(&mut self, nums:usize)  {
+    pub fn change_recv_pkts(&mut self, nums: usize) {
         self.recv_pkts = nums;
     }
 
-    pub fn change_non_res_times(&mut self,nums:usize) {
+    pub fn change_non_res_times(&mut self, nums: usize) {
         self.non_res_times = nums;
     }
 
@@ -225,10 +254,83 @@ SP: ShMemProvider,
         self
     }
 
-
     pub fn asan_obs(mut self, asan_obs: Handle<AsanBacktraceObserver>) -> Self {
         self.asan_obs = Some(asan_obs);
         self
+    }
+
+    fn maybe_emit_historical_coverage_stats<EM>(
+        &mut self,
+        state: &mut S,
+        mgr: &mut EM,
+    ) -> Result<(), libafl::prelude::Error>
+    where
+        OT: MatchName,
+        S: HasExecutions,
+        EM: EventFirer<State = S>,
+    {
+        let multi_map_ob_handle = HitcountsIterableMapObserver::new(MultiMapObserver::new(
+            "combined-edges",
+            Vec::<libafl_bolts::ownedref::OwnedMutSlice<u8>>::new(),
+        ))
+        .handle();
+        let Some(hit_multi_map_ob) = self.observers.get(&multi_map_ob_handle) else {
+            return Ok(());
+        };
+        let multi_map_ob = &hit_multi_map_ob.base;
+        if multi_map_ob.maps.len() < 2 {
+            return Ok(());
+        }
+
+        let map_fir = &multi_map_ob.maps[0];
+        let map_sec = &multi_map_ob.maps[1];
+        let initial = multi_map_ob.initial();
+        let mut first_count = 0usize;
+        let mut sec_count = 0usize;
+        let first_total = map_fir.as_slice().len();
+        let sec_total = map_sec.as_slice().len();
+
+        for i in 0..first_total {
+            if map_fir[i] != initial {
+                self.coverage_map1[i] = true;
+            }
+            if self.coverage_map1[i] {
+                first_count += 1;
+            }
+        }
+        for i in 0..sec_total {
+            if map_sec[i] != initial {
+                self.coverage_map2[i] = true;
+            }
+            if self.coverage_map2[i] {
+                sec_count += 1;
+            }
+        }
+
+        let completed_targets = *state.executions();
+        if completed_targets == 0 || completed_targets % 2 != 0 {
+            return Ok(());
+        }
+
+        let total_count = first_count + sec_count;
+        let total_total = first_total + sec_total;
+        let coverage_line = format!(
+            "first={first_count}/{first_total} | second={sec_count}/{sec_total} | total={total_count}/{total_total}"
+        );
+
+        mgr.fire(
+            state,
+            Event::UpdateUserStats {
+                name: Cow::Borrowed("history-coverage"),
+                value: UserStats::new(
+                    UserStatsValue::String(Cow::Owned(coverage_line)),
+                    AggregatorOps::None,
+                ),
+                phantom: PhantomData,
+            },
+        )?;
+
+        Ok(())
     }
 
     pub fn update_recv_pkt_obs(&mut self, buf_obs: RecvPktNumObserver) {
@@ -241,40 +343,31 @@ SP: ShMemProvider,
         }
     }
 
-    pub fn set_initial_mem_usage(&mut self) ->bool{
+    pub fn set_initial_mem_usage(&mut self) -> bool {
         let mem_observer_ref = MemObserver::new("mem").handle();
         if let Some(mem_observer) = self.observers.get_mut(&mem_observer_ref) {
             if self.pid != mem_observer.pid {
-                mem_observer.initial_mem = 0;
+                mem_observer.reset_measurement();
                 mem_observer.set_pid(self.pid);
             }
-            mem_observer.before_mem = 0;
-            let map_file = format!("/proc/{}/maps", mem_observer.pid);
-            let file = match File::open(map_file){
-                Ok(file) => file,
-                Err(e) => {
-                    error!("Failed to open file: {}", e);
-                    return false;
+            if mem_observer.capture_before_snapshot() {
+                if mem_observer.initial_mem == 0 {
+                    warn!(
+                        "initial_mem is 0, set to before_mem: {}",
+                        mem_observer.before_mem
+                    );
                 }
-            };
-            let reader = io::BufReader::new(file);
-            for cur_line in reader.lines() {
-                let line = cur_line.unwrap();
-                if let Some((start, end)) = mem_observer.parse_rw_memory_range(&line) {
-                    mem_observer.before_mem += end - start;
-                }
+                return true;
             }
-            if mem_observer.initial_mem == 0 {
-                mem_observer.initial_mem = mem_observer.before_mem;
-                warn!("initial_mem is 0, set to before_mem: {}", mem_observer.before_mem);
-            }
-            return true;
+            error!(
+                "Failed to capture initial memory snapshot for pid {}",
+                mem_observer.pid
+            );
         }
-        return false;
+        false
     }
 
-    pub fn inital_first_cpu_usage_obs(&mut self)  {
-
+    pub fn inital_first_cpu_usage_obs(&mut self) {
         let cpu_usage_observer = CPUUsageObserver::new("first_cpu_usage");
         let cpu_usage_observer_ref = cpu_usage_observer.handle();
         if let Some(cpu_usage_observer) = self.observers.get_mut(&cpu_usage_observer_ref) {
@@ -288,8 +381,7 @@ SP: ShMemProvider,
         }
     }
 
-    pub fn inital_second_cpu_usage_obs(&mut self)   {
-
+    pub fn inital_second_cpu_usage_obs(&mut self) {
         let cpu_usage_observer = CPUUsageObserver::new("second_cpu_usage");
         let cpu_usage_observer_ref = cpu_usage_observer.handle();
         if let Some(cpu_usage_observer) = self.observers.get_mut(&cpu_usage_observer_ref) {
@@ -303,17 +395,16 @@ SP: ShMemProvider,
         }
     }
 
-    pub fn get_first_cpu_usage_ob_mut (&mut self) -> &mut CPUUsageObserver {
+    pub fn get_first_cpu_usage_ob_mut(&mut self) -> &mut CPUUsageObserver {
         let cpu_usage_observer_ref = CPUUsageObserver::new("first_cpu_usage").handle();
         self.observers.get_mut(&cpu_usage_observer_ref).unwrap()
     }
-    pub fn get_second_cpu_usage_ob_mut (&mut self) -> &mut CPUUsageObserver {
+    pub fn get_second_cpu_usage_ob_mut(&mut self) -> &mut CPUUsageObserver {
         let cpu_usage_observer_ref = CPUUsageObserver::new("second_cpu_usage").handle();
         self.observers.get_mut(&cpu_usage_observer_ref).unwrap()
     }
 
-
-    pub fn update_first_cpu_usage_obs(&mut self,cur_cpu_usages: Vec<f64>) ->bool {
+    pub fn update_first_cpu_usage_obs(&mut self, cur_cpu_usages: Vec<f64>) -> bool {
         let cpu_usage_observer_ref = CPUUsageObserver::new("first_cpu_usage").handle();
         if let Some(cpu_usage_observer) = self.observers.get_mut(&cpu_usage_observer_ref) {
             if !cpu_usage_observer.judge_proc_exist() {
@@ -340,10 +431,10 @@ SP: ShMemProvider,
                 cpu_usage_observer.prev_process_time = curr_process_time;
             }
         }
-        return true
+        return true;
     }
 
-    pub fn update_second_cpu_usage_obs(&mut self,cur_cpu_usages: Vec<f64>) ->bool {
+    pub fn update_second_cpu_usage_obs(&mut self, cur_cpu_usages: Vec<f64>) -> bool {
         let cpu_usage_observer_ref = CPUUsageObserver::new("second_cpu_usage").handle();
         if let Some(cpu_usage_observer) = self.observers.get_mut(&cpu_usage_observer_ref) {
             if !cpu_usage_observer.judge_proc_exist() {
@@ -370,9 +461,15 @@ SP: ShMemProvider,
                 cpu_usage_observer.prev_process_time = curr_process_time;
             }
         }
-        return true
+        return true;
     }
-    pub fn cc_observer_update(&mut self, pkn:u64,error_code:u64,frame_type:u64,reason:Vec<u8>) {
+    pub fn cc_observer_update(
+        &mut self,
+        pkn: u64,
+        error_code: u64,
+        frame_type: u64,
+        reason: Vec<u8>,
+    ) {
         let cc_times_observer_ref = CCTimesObserver::new("cc_time").handle();
         if let Some(cc_times_observer) = self.observers.get_mut(&cc_times_observer_ref) {
             cc_times_observer.pkn = pkn;
@@ -388,7 +485,7 @@ SP: ShMemProvider,
         }
     }
 
-    pub fn ack_observer_add_range(&mut self, ranges:RangeSet) {
+    pub fn ack_observer_add_range(&mut self, ranges: RangeSet) {
         let ack_observer_ref = ACKRangeObserver::new("ack").handle();
         if let Some(ack_observer) = self.observers.get_mut(&ack_observer_ref) {
             ranges.iter().for_each(|range| {
@@ -397,7 +494,7 @@ SP: ShMemProvider,
         }
     }
 
-    pub fn ctrl_observer_add_frame(&mut self, frames:Vec<Frame>) {
+    pub fn ctrl_observer_add_frame(&mut self, frames: Vec<Frame>) {
         let ctrl_observer_ref = RecvControlFrameObserver::new("ctrl").handle();
         if let Some(ctrl_observer) = self.observers.get_mut(&ctrl_observer_ref) {
             for frame in frames.iter() {
@@ -406,11 +503,13 @@ SP: ShMemProvider,
         }
     }
 
-    pub fn data_observer_add_frame(&mut self, 
-                                    crypto_frames:Vec<FrameWithPkn>,
-                                    stream_frames:Vec<FrameWithPkn>,
-                                    pr_frames:Vec<FrameWithPkn>,
-                                    dgram_frames:Vec<FrameWithPkn>) {
+    pub fn data_observer_add_frame(
+        &mut self,
+        crypto_frames: Vec<FrameWithPkn>,
+        stream_frames: Vec<FrameWithPkn>,
+        pr_frames: Vec<FrameWithPkn>,
+        dgram_frames: Vec<FrameWithPkn>,
+    ) {
         let data_observer_ref = RecvDataFrameObserver::new("data").handle();
         if let Some(data_observer) = self.observers.get_mut(&data_observer_ref) {
             for frame in crypto_frames.iter() {
@@ -428,7 +527,7 @@ SP: ShMemProvider,
         }
     }
 
-    pub fn handle_frames(&mut self, recv_frames:Vec<FrameWithPkn>) {
+    pub fn handle_frames(&mut self, recv_frames: Vec<FrameWithPkn>) {
         let mut ctrl_frames: Vec<Frame> = Vec::new();
         let mut crypto_frames: Vec<FrameWithPkn> = Vec::new();
         let mut stream_frames: Vec<FrameWithPkn> = Vec::new();
@@ -439,89 +538,107 @@ SP: ShMemProvider,
             match &recv_frame.frame {
                 frame::Frame::Padding { .. } => (),
                 frame::Frame::Ping { .. } => (),
-                frame::Frame::ACK { ranges,ack_delay,ecn_counts } => {
+                frame::Frame::ACK {
+                    ranges,
+                    ack_delay,
+                    ecn_counts,
+                } => {
                     self.ack_observer_add_range(ranges.clone());
                     ranges.iter().for_each(|range| {
                         debug!("ack range: {:?}", range);
                     });
-                },
-                frame::Frame::ResetStream{ .. } => {
+                }
+                frame::Frame::ResetStream { .. } => {
                     ctrl_frames.push(recv_frame.frame.clone());
-                },
-                frame::Frame::StopSending{ .. } => {
+                }
+                frame::Frame::StopSending { .. } => {
                     ctrl_frames.push(recv_frame.frame.clone());
-                },
-                frame::Frame::Crypto{ data } => {
+                }
+                frame::Frame::Crypto { data } => {
                     crypto_frames.push(recv_frame.clone());
-                },
-                frame::Frame::NewToken{ .. } => {
+                }
+                frame::Frame::NewToken { .. } => {
                     ctrl_frames.push(recv_frame.frame.clone());
-                },
-                frame::Frame::Stream{ data,stream_id } => {
+                }
+                frame::Frame::Stream { data, stream_id } => {
                     stream_frames.push(recv_frame.clone());
-                },
-                frame::Frame::MaxData{ .. } => {
+                }
+                frame::Frame::MaxData { .. } => {
                     ctrl_frames.push(recv_frame.frame.clone());
-                },
-                frame::Frame::MaxStreamData{ .. } => {
+                }
+                frame::Frame::MaxStreamData { .. } => {
                     ctrl_frames.push(recv_frame.frame.clone());
-                },
-                frame::Frame::MaxStreamsBidi{ .. } => {
+                }
+                frame::Frame::MaxStreamsBidi { .. } => {
                     ctrl_frames.push(recv_frame.frame.clone());
-                },
-                frame::Frame::DataBlocked{ .. } => {
+                }
+                frame::Frame::DataBlocked { .. } => {
                     ctrl_frames.push(recv_frame.frame.clone());
-                },
-                frame::Frame::StreamDataBlocked{ .. } => {
+                }
+                frame::Frame::StreamDataBlocked { .. } => {
                     ctrl_frames.push(recv_frame.frame.clone());
-                },
-                frame::Frame::StreamsBlockedBidi{ .. } => {
+                }
+                frame::Frame::StreamsBlockedBidi { .. } => {
                     ctrl_frames.push(recv_frame.frame.clone());
-                },
-                frame::Frame::NewConnectionId{ .. } => {
+                }
+                frame::Frame::NewConnectionId { .. } => {
                     ctrl_frames.push(recv_frame.frame.clone());
-                },
-                frame::Frame::RetireConnectionId{ .. } => {
+                }
+                frame::Frame::RetireConnectionId { .. } => {
                     ctrl_frames.push(recv_frame.frame.clone());
-                },
-                frame::Frame::PathChallenge{ .. } => {
+                }
+                frame::Frame::PathChallenge { .. } => {
                     ctrl_frames.push(recv_frame.frame.clone());
-                },
-                frame::Frame::PathResponse{ data } => {
+                }
+                frame::Frame::PathResponse { data } => {
                     pr_frames.push(recv_frame.clone());
-                },
-                frame::Frame::ConnectionClose{ error_code,frame_type,reason } => {
-                    self.cc_observer_update(recv_frame.pkn,*error_code,*frame_type,reason.clone());
-                },
-                frame::Frame::ApplicationClose{ error_code,reason } => {
-                    self.cc_observer_update(recv_frame.pkn,*error_code,0,reason.clone());
-                },
+                }
+                frame::Frame::ConnectionClose {
+                    error_code,
+                    frame_type,
+                    reason,
+                } => {
+                    self.cc_observer_update(
+                        recv_frame.pkn,
+                        *error_code,
+                        *frame_type,
+                        reason.clone(),
+                    );
+                }
+                frame::Frame::ApplicationClose { error_code, reason } => {
+                    self.cc_observer_update(recv_frame.pkn, *error_code, 0, reason.clone());
+                }
                 frame::Frame::HandshakeDone => {
                     ctrl_frames.push(recv_frame.frame.clone());
-                },
-                frame::Frame::Datagram{ data } => {
+                }
+                frame::Frame::Datagram { data } => {
                     dgram_frames.push(recv_frame.clone());
-                },
-                frame::Frame::DatagramHeader{ length} => {
+                }
+                frame::Frame::DatagramHeader { length } => {
                     ctrl_frames.push(recv_frame.frame.clone());
-                },
-                frame::Frame::CryptoHeader{ offset,length }  => {
+                }
+                frame::Frame::CryptoHeader { offset, length } => {
                     ctrl_frames.push(recv_frame.frame.clone());
-                },
-                frame::Frame::Others{ .. }  => (),
-                frame::Frame::StreamHeader { stream_id, offset, length, fin } => {
+                }
+                frame::Frame::Others { .. } => (),
+                frame::Frame::StreamHeader {
+                    stream_id,
+                    offset,
+                    length,
+                    fin,
+                } => {
                     ctrl_frames.push(recv_frame.frame.clone());
-                },
+                }
                 frame::Frame::MaxStreamsUni { max } => {
                     ctrl_frames.push(recv_frame.frame.clone());
-                },
+                }
                 frame::Frame::StreamsBlockedUni { limit } => {
                     ctrl_frames.push(recv_frame.frame.clone());
-                },
+                }
             }
         }
         self.ctrl_observer_add_frame(ctrl_frames);
-        self.data_observer_add_frame(crypto_frames,stream_frames,pr_frames,dgram_frames);
+        self.data_observer_add_frame(crypto_frames, stream_frames, pr_frames, dgram_frames);
     }
 
     pub fn pcap_observer_update_get_name(&mut self) -> String {
@@ -530,28 +647,36 @@ SP: ShMemProvider,
             pcap_observer.port = self.port;
             pcap_observer.new_record.port = self.port;
             pcap_observer.new_record.name.clone()
-        }
-        else {
+        } else {
             String::new()
         }
     }
 
-    pub fn sync_srand_seed_path(&mut self,pcap_path:String) {
+    pub fn sync_srand_seed_path(&mut self, pcap_path: String) {
         let misc_observer_ref = MiscObserver::new("misc").handle();
         if let Some(misc_observer) = self.observers.get_mut(&misc_observer_ref) {
-            misc_observer.srand_seed =  self.frame_rand_seed;
+            misc_observer.srand_seed = self.frame_rand_seed;
         }
     }
 
     pub fn nor_conn_ob_connect(&mut self) {
-        let conn_observer_ref = NormalConnObserver::new("conn","127.0.0.1".to_owned(),self.port,"myserver.xx".to_owned()).handle();
+        let conn_observer_ref = NormalConnObserver::new(
+            "conn",
+            "127.0.0.1".to_owned(),
+            self.port,
+            "myserver.xx".to_owned(),
+        )
+        .handle();
         if let Some(conn_observer) = self.observers.get_mut(&conn_observer_ref) {
             conn_observer.calc_pre_spend_time();
         }
     }
-    pub fn build_quic_struct(mut self, server_name: String, server_port: u16, server_host: String) -> Self {
-
-    
+    pub fn build_quic_struct(
+        mut self,
+        server_name: String,
+        server_port: u16,
+        server_host: String,
+    ) -> Self {
         let quic_st = QuicStruct::new(server_name, server_port, server_host);
         self.quic_st = Some(quic_st);
         self
@@ -563,10 +688,7 @@ SP: ShMemProvider,
         let server_host = self.quic_st.as_ref().unwrap().server_host.clone();
         //drop(self.quic_st);
         self.quic_st = Some(QuicStruct::new(server_name, server_port, server_host));
-
-
     }
-
 
     pub fn build(mut self) -> Self
     where
@@ -577,11 +699,9 @@ SP: ShMemProvider,
 
         let size_in_bytes = (0x1000u32).to_ne_bytes();
         shmem.as_slice_mut()[..4].clone_from_slice(&size_in_bytes[..4]);
-        let map = shmem ;
+        let map = shmem;
         self.map = Some(map);
         self
-            
-            
     }
 
     pub fn get_coverage_map_size(&self) -> Option<usize> {
@@ -589,12 +709,10 @@ SP: ShMemProvider,
     }
 
     pub fn judge_server_status(&self) -> u32 {
-
-        
         // warn!("judge_server_status:{:?}",self.judge_command);
         let output = std::process::Command::new(&self.judge_command)
-        .output()
-        .expect("Failed to execute command");
+            .output()
+            .expect("Failed to execute command");
 
         // 检查命令的执行状态
         if output.status.success() {
@@ -607,8 +725,8 @@ SP: ShMemProvider,
                 //Err(e) => {eprintln!("Failed to parse integer: {}", e);return 0},
                 Err(e) => {
                     debug!("Failed to parse integer: {}", e);
-                    return 0
-                },
+                    return 0;
+                }
             }
         } else {
             // 处理标准错误输出
@@ -617,33 +735,30 @@ SP: ShMemProvider,
             return 0;
         }
     }
-
-
-
 }
 
-impl<OT, S,SP> UsesState for NetworkRestartExecutor<OT, S, SP>
+impl<OT, S, SP> UsesState for NetworkRestartExecutor<OT, S, SP>
 where
-    S: State, 
-    SP: ShMemProvider
+    S: State,
+    SP: ShMemProvider,
 {
     type State = S;
 }
 
-impl<OT, S,SP> UsesObservers for NetworkRestartExecutor<OT, S,SP>
+impl<OT, S, SP> UsesObservers for NetworkRestartExecutor<OT, S, SP>
 where
     OT: ObserversTuple<S>,
     S: State,
-    SP: ShMemProvider
+    SP: ShMemProvider,
 {
     type Observers = OT;
 }
 
-impl<OT, S,SP> HasObservers for NetworkRestartExecutor<OT, S,SP>
+impl<OT, S, SP> HasObservers for NetworkRestartExecutor<OT, S, SP>
 where
     S: State,
     OT: ObserversTuple<S>,
-    SP: ShMemProvider
+    SP: ShMemProvider,
 {
     fn observers(&self) -> RefIndexable<&Self::Observers, Self::Observers> {
         RefIndexable::from(&self.observers)
@@ -654,14 +769,15 @@ where
     }
 }
 
-impl<EM, OT, S,SP, Z> Executor<EM, Z> for NetworkRestartExecutor<OT, S,SP>
+impl<EM, OT, S, SP, Z> Executor<EM, Z> for NetworkRestartExecutor<OT, S, SP>
 where
-    EM: UsesState<State = S>,
-    S: State + HasExecutions + HasCorpus + HasSolutions +HasRandSeed,
+    EM: EventFirer<State = S>,
+    S: State + HasExecutions + HasCorpus + HasSolutions + HasRandSeed,
     S::Input: HasTargetBytes,
     SP: ShMemProvider,
     OT: MatchName + ObserversTuple<S>,
-    Z: UsesState<State = S> {
+    Z: UsesState<State = S>,
+{
     fn run_target(
         &mut self,
         _fuzzer: &mut Z,
@@ -676,41 +792,11 @@ where
             is_first = true;
         }
         if is_first {
-            let multi_map_ob_handle = HitcountsIterableMapObserver::new(MultiMapObserver::new("combined-edges", Vec::<libafl_bolts::ownedref::OwnedMutSlice<u8>>::new())).handle();
-            let hit_multi_map_ob = self.observers.get(&multi_map_ob_handle).unwrap();
-            let multi_map_ob = &hit_multi_map_ob.base;
-            let map_fir = &multi_map_ob.maps[0];
-            let map_sec = &multi_map_ob.maps[1];
-            let initial = multi_map_ob.initial();
-            let mut first_count = 0;
-            let mut sec_count = 0;
-            let first_total = map_fir.as_slice().len();
-            let sec_total = map_sec.as_slice().len();
-            for i in 0..first_total {
-                if map_fir[i] != initial {
-                    self.coverage_map1[i] = true;
-    
-                }
-                if self.coverage_map1[i] == true {
-                    first_count += 1;
-                }
-            }
-            for i in 0..sec_total {
-                if map_sec[i] != initial {
-                    self.coverage_map2[i] = true;
-    
-                }
-                if self.coverage_map2[i] == true {
-                    sec_count += 1;
-                }
-            }
-
-            // warn!("cov_fir cnt/tot: {:?}/{:?}",first_count,first_total);
-            // warn!("cov_sec cnt/tot: {:?}/{:?}",sec_count,sec_total);
+            self.maybe_emit_historical_coverage_stats(state, _mgr)?;
         }
         // for check_corpus to replay the srand seed
-        if state.rand_seed() != 0{
-            warn!("checking corpus: seed_{:?}",state.rand_seed());
+        if state.rand_seed() != 0 {
+            warn!("checking corpus: seed_{:?}", state.rand_seed());
             self.frame_rand_seed = state.rand_seed();
             if !is_first {
                 state.set_rand_seed(0);
@@ -721,13 +807,13 @@ where
         let pcap_path = self.pcap_observer_update_get_name();
         self.sync_srand_seed_path(pcap_path.clone());
 
-        unsafe { srand(self.frame_rand_seed); }
-        self.frame_rand_seed = unsafe {rand().try_into().unwrap()};
+        unsafe {
+            srand(self.frame_rand_seed);
+        }
+        self.frame_rand_seed = unsafe { rand().try_into().unwrap() };
         // info!("now {:?} corpus",state.corpus().count());
         info!("running corpus: {:?}", state.corpus().current());
-        
 
-        
         //let mut recv_pkt_num_observer = None;
         // for observer in observers.iter() {
         //     if let Some(recv_pkt_num_observer) = observer.downcast_mut::<RecvPktNumObserver>() {}
@@ -738,8 +824,7 @@ where
         // let mut cc_times_observer = self.observers.get_mut(&cc_times_observer_ref).unwrap();
         // let mut buf_asan_backtrace_observer = AsanBacktraceObserver::new("asan_backtrace");
 
-
-        let mut out = [0; MAX_DATAGRAM_SIZE<<10];
+        let mut out = [0; MAX_DATAGRAM_SIZE << 10];
         let mut exit_kind = ExitKind::Ok;
         let mut total_recv_pkts = 0;
         let mut total_recv_bytes = 0;
@@ -762,14 +847,14 @@ where
         let mut pid = self.judge_server_status();
         // 如果服务未启动，则启动服务
         // warn!("non_res_times:{:?} recv_pkts:{:?}",self.non_res_times,self.recv_pkts);
-        info!("pid:{:?},recore_pid:{:?}",pid,self.pid);
+        info!("pid:{:?},recore_pid:{:?}", pid, self.pid);
         if pid != self.pid {
             error!("pid not match");
         }
         if pid == 0 || self.pid == 0 || pid != self.pid {
-            while(true) {
-                info!("{:?}",self.envs);
-                start_harness_with_envs(&self.start_command,self.envs.clone());
+            while (true) {
+                info!("{:?}", self.envs);
+                start_harness_with_envs(&self.start_command, self.envs.clone());
                 // std::process::Command::new("sh").arg("-c").arg(&self.start_command)
                 // .output()
                 // .unwrap();
@@ -778,22 +863,20 @@ where
                 // info!("pid:{:?}",pid);
                 if pid == 0 {
                     error!("Failed to start server");
-                }
-                else {
+                } else {
                     break;
                 }
             }
             self.pid = pid;
         }
-        info!("pid:{:?}",self.pid);
-        let set_mem = self.set_initial_mem_usage(); 
+        info!("pid:{:?}", self.pid);
+        let set_mem = self.set_initial_mem_usage();
         if set_mem == false {
             warn!("Failed to set initial memory usage");
             return Ok(ExitKind::Crash);
         }
 
-
-         if is_first {
+        if is_first {
             self.inital_first_cpu_usage_obs();
             // self.get_first_cpu_usage_ob_mut()
         } else {
@@ -811,17 +894,15 @@ where
             CPUUsageObserver::new("second_cpu_usage").handle()
         };
 
-        
         //quic_st 必须存在，检查 quic_st 合法性
         let mut valid_quic_st = false;
-        if valid_quic_st == false || self.non_res_times >= 3{
+        if valid_quic_st == false || self.non_res_times >= 3 {
             debug!("judged connection closed");
             self.rebuild_quic_struct();
         }
-        
-       
+
         let mut quic_st = self.quic_st.as_mut().unwrap();
-        match & mut quic_st.conn  {
+        match &mut quic_st.conn {
             //conn不存在：重新建立连接
             None => {
                 for i in 0..2 {
@@ -833,24 +914,28 @@ where
                             // sleep(Duration::from_secs(1));
                             //eprintln!("Failed to connect: {:?}", e);
                             exit_kind = ExitKind::Crash;
-                        },
+                        }
                         Ok(_) => {
                             exit_kind = ExitKind::Ok;
                             break;
-                        },
+                        }
                     }
                 }
-
-            },
-            
-            Some(conn) => {
             }
+
+            Some(conn) => {}
         }
-        info!("Connection established, from {:?} to {:?}",quic_st.local_addr.port(),quic_st.peer_addr.port());
+        info!(
+            "Connection established, from {:?} to {:?}",
+            quic_st.local_addr.port(),
+            quic_st.peer_addr.port()
+        );
         if exit_kind == ExitKind::Crash {
             error!("Failed to connect, markd as crash");
             //send stop to pid
-            std::process::Command::new("sh").arg("-c").arg(format!("kill -9 {}", self.pid))
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("kill -9 {}", self.pid))
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status()
@@ -862,7 +947,7 @@ where
         let cpu_usage_observer = self.observers.get_mut(&cpu_usage_observer_ref).unwrap();
 
         let binding = input.target_bytes();
-        let mut inputs = binding.as_slice();        
+        let mut inputs = binding.as_slice();
         let mut input_struct = InputStruct::new();
         input_struct = InputStruct_deserialize(inputs);
 
@@ -871,29 +956,28 @@ where
         // let lost_time_dur = 0;
         let recv_time = input_struct.recv_timeout;
         let mut recv_left_time = recv_time;
-                
+
         // let max_pkt_len = 0;
         let max_pkt_len = 0;
         let mut cur_pkt_len = 0;
-        let mut total_sent_frames:u64 = 0;
+        let mut total_sent_frames: u64 = 0;
         let mut total_sent_pkts: u64 = 0;
         let mut total_sent_bytes = 0;
         let mut total_recv_frames_len = 0;
         let cycles = input_struct.frames_cycle.len();
         let mut sending_acks: Vec<u64> = Vec::new();
-        for cur_cycle in 0..cycles{
+        for cur_cycle in 0..cycles {
             let repeat_num = input_struct.frames_cycle[cur_cycle].repeat_num;
             let mut start_pos = 0;
-            for i in 0..repeat_num  {
+            for i in 0..repeat_num {
                 if i % 5001 == 5000 || i == repeat_num - 1 {
-                    let frames = input_struct.gen_frames(start_pos,i as u64,cur_cycle);
+                    let frames = input_struct.gen_frames(start_pos, i as u64, cur_cycle);
                     start_pos = i as u64 + 1;
                     let mut frame_list: Vec<frame::Frame> = Vec::new();
                     for frame in frames.iter() {
-
                         for pkn in sending_acks.iter() {
                             let mut ranges = RangeSet::default();
-                            ranges.insert(*pkn..*pkn+1);
+                            ranges.insert(*pkn..*pkn + 1);
                             let ack_frame = frame::Frame::ACK {
                                 ack_delay: 0,
                                 ranges,
@@ -904,8 +988,9 @@ where
                             debug!("sending ack frame: {:?}", ack_frame);
                         }
                         sending_acks.clear();
-                        debug!("frame len: {:?}", frame.wire_len());
-                        debug!("frame type: {:?}", frame);
+                        // info!("frame len: {:?}", frame.wire_len());
+                        // info!("frame type: {:?}", frame);
+                        // info!("frame:{:?}",frame);
                         // 注释代码是按照标准的MTU将帧尽可能的合并，在fuzz过程中这应该是负优化，于是每次只发送1个帧
                         if cur_pkt_len + frame.wire_len() < max_pkt_len {
                             frame_list.push(frame.clone());
@@ -919,15 +1004,14 @@ where
                         total_sent_frames += 1;
                         total_sent_bytes += frame.wire_len();
                         total_sent_pkts += 1;
-    
-            
+
                         quic_st.send_pkt_to_server(pkt_type, &frame_list, &mut out);
-                        match quic_st.handle_sending(){
+                        match quic_st.handle_sending() {
                             Err(e) => {
                                 error!("Failed to send data: {:?}", e);
                                 eprintln!("Failed to send data: {:?}", e);
                                 exit_kind = ExitKind::Crash;
-                            },
+                            }
                             Ok(_) => (),
                         }
                         // info!("total sent frames: {:?}, all: {:?}", total_sent_frames, frames.len());
@@ -936,14 +1020,14 @@ where
                         if recv_left_time <= lost_time_dur {
                             let send_left_time = lost_time_dur - recv_left_time;
                             // sleep(Duration::from_millis(recv_left_time.try_into().unwrap()));
-                            recv_left_time =  recv_time - send_left_time ;
-                            //recv&handle conn's received packet 
-                            
-                            match quic_st.handle_recving_once(){
+                            recv_left_time = recv_time - send_left_time;
+                            //recv&handle conn's received packet
+
+                            match quic_st.handle_recving_once() {
                                 Err(e) => {
                                     debug!("Failed to recv data: {:?}", e);
                                     exit_kind = ExitKind::Crash;
-                                },
+                                }
                                 Ok(recv_frames) => {
                                     total_recv_frames_len += recv_frames.len();
                                     let mut recv_pkts = 0;
@@ -951,8 +1035,11 @@ where
                                     debug!("recv frames: {:?}", recv_frames);
                                     for recv_frame in recv_frames.iter() {
                                         match &recv_frame.frame {
-                                            frame::Frame::ACK { ack_delay, ranges, ecn_counts } => {
-                                            }
+                                            frame::Frame::ACK {
+                                                ack_delay,
+                                                ranges,
+                                                ecn_counts,
+                                            } => {}
                                             //对于所有其他情况 统一处理：
                                             _ => {
                                                 if !sending_acks.contains(&recv_frame.pkn) {
@@ -962,27 +1049,23 @@ where
                                                     sending_acks.push(recv_frame.pkn);
                                                     break;
                                                 }
-                                               
                                             }
                                         }
                                     }
                                     for recv_frame in recv_frames.iter() {
-
                                         total_recv_frames.push(recv_frame.clone());
                                         recv_pkts += 1;
                                         recv_bytes += recv_frame.frame.wire_len();
                                     }
                                     total_recv_pkts += recv_pkts;
                                     total_recv_bytes += recv_bytes;
-            
+
                                     ()
                                 }
                             }
-            
+
                             // sleep(Duration::from_millis( send_left_time as u64));
-                            
-                        }
-                        else {
+                        } else {
                             // sleep(Duration::from_millis(lost_time_dur.try_into().unwrap()));
                             recv_left_time -= lost_time_dur;
                         }
@@ -990,35 +1073,38 @@ where
                             error!("cannot find process");
                             exit_kind = ExitKind::Crash;
                             // stop_capture(capture_process);
-                            info!("total send&recv frames : {:?} {:?}", total_sent_frames, total_recv_frames_len);
+                            info!(
+                                "total send&recv frames : {:?} {:?}",
+                                total_sent_frames, total_recv_frames_len
+                            );
                             return Ok(exit_kind);
                         }
                         // 每发送100个包统计一下CPU使用率，不然统计的太多了
-                        if total_sent_frames %100 ==0 {
+                        if total_sent_frames % 100 == 0 {
                             let cur_cpu_usage = cpu_usage_observer.get_cur_cpu_usage();
                             cur_cpu_usages.push(cur_cpu_usage);
                         }
-            
-                        debug!("recv_left_time: {:?},lost_time: {:?}", recv_left_time,lost_time_dur);
+
+                        debug!(
+                            "recv_left_time: {:?},lost_time: {:?}",
+                            recv_left_time, lost_time_dur
+                        );
                         cur_pkt_len = frame.wire_len();
                         frame_list.clear();
                         // frame_list.push(frame.clone());
-            
                     }
-                    debug!("sent {:?} frames",frames.len());
-    
+                    debug!("sent {:?} frames", frames.len());
                 }
             }
-    
-        } 
+        }
 
         while true {
-            match quic_st.handle_recving_once(){
+            match quic_st.handle_recving_once() {
                 Err(e) => {
                     eprintln!("Failed to recv data: {:?}", e);
                     break;
                     // exit_kind = ExitKind::Crash;
-                },
+                }
                 Ok(recv_frames) => {
                     if recv_frames.len() == 0 {
                         break;
@@ -1038,24 +1124,24 @@ where
             }
         }
         // sleep(Duration::from_secs(100));
-        info!("total send&recv frames : {:?} {:?}", total_sent_frames, total_recv_frames_len);
-
+        info!(
+            "total send&recv frames : {:?} {:?}",
+            total_sent_frames, total_recv_frames_len
+        );
 
         if total_recv_pkts != 0 {
             self.change_recv_pkts(total_recv_pkts);
             self.change_non_res_times(0);
-
-        }
-        else {
+        } else {
             self.change_recv_pkts(0);
             self.change_non_res_times(self.non_res_times + 1);
         }
         buf_recv_pkt_num_observer.set_recv_bytes(total_recv_bytes as u64);
         buf_recv_pkt_num_observer.set_recv_pkts(total_recv_pkts as u64);
         buf_recv_pkt_num_observer.set_send_bytes(total_sent_bytes as u64);
-        buf_recv_pkt_num_observer.set_send_pkts(total_sent_pkts  as u64);
+        buf_recv_pkt_num_observer.set_send_pkts(total_sent_pkts as u64);
         self.update_recv_pkt_obs(buf_recv_pkt_num_observer);
-        
+
         let valid_cpu_usage = match is_first {
             true => self.update_first_cpu_usage_obs(cur_cpu_usages),
             false => self.update_second_cpu_usage_obs(cur_cpu_usages),
@@ -1070,22 +1156,21 @@ where
         /* handle every frame */
         self.handle_frames(total_recv_frames);
 
-        
         let res = self.judge_server_status();
-        if self.non_res_times == 30{
+        if self.non_res_times == 30 {
             error!("marked crashed");
             // kill self.pid
             let pid = self.pid;
             warn!("killing pid: {:?}", pid);
-            let signal = self.kill_signal.unwrap_or(Signal::SIGKILL);
-            unsafe {
-                kill(Pid::from_raw(pid as i32), signal).unwrap();
-            }
+            // let signal = self.kill_signal.unwrap_or(Signal::SIGKILL);
+            // unsafe {
+            //     kill(Pid::from_raw(pid as i32), signal).unwrap();
+            // }
             exit_kind = ExitKind::Ok;
         }
 
         // stop_capture(capture_process);
-        
+
         Ok(exit_kind)
     }
 }

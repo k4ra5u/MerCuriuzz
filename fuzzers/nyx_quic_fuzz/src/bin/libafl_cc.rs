@@ -25,9 +25,8 @@ pub fn main() {
             .expect("Failed to parse the command line")
             // Enable libafl's coverage instrumentation
             .add_arg("-fsanitize-coverage=trace-pc-guard")
-            // Imitate afl-cc's compile definitions 
+            // Imitate afl-cc's compile definitions
             .add_arg("-D__AFL_FUZZ_INIT()=void libafl_start_forkserver(void)")
-
             .add_arg("-D__AFL_INIT()=libafl_start_forkserver()")
             // Link with libafl's forkserver implementation
             .link_staticlib(&dir, "libafl_cc")

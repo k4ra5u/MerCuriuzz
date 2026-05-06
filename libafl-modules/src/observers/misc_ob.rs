@@ -1,6 +1,6 @@
 use std::borrow::Cow;
-use std::time::Duration;
 use std::net::ToSocketAddrs;
+use std::time::Duration;
 
 use std::io::prelude::*;
 
@@ -8,26 +8,27 @@ use std::rc::Rc;
 
 use std::cell::RefCell;
 
-
-use libafl::inputs::HasMutatorBytes;
-use libafl::prelude::{DifferentialObserver, ObserversTuple};
-use libafl_bolts::ownedref::OwnedMutPtr;
-use libafl_bolts::tuples::Handle;
-use libafl_bolts::{Error, Named,tuples::MatchName, rands::Rand,};
-use log::{debug, error, info};
-use ring::rand::*;
-use serde::{Deserialize, Serialize};
-use libafl::{executors::ExitKind, inputs::UsesInput,observers::Observer, state::UsesState,state::HasRand};
-use quiche::{frame, packet, Connection, ConnectionId, Header};
 use crate::inputstruct::*;
 use crate::misc::*;
-use std::thread::sleep;
+use libafl::inputs::HasMutatorBytes;
+use libafl::prelude::{DifferentialObserver, ObserversTuple};
+use libafl::{
+    executors::ExitKind, inputs::UsesInput, observers::Observer, state::HasRand, state::UsesState,
+};
+use libafl_bolts::ownedref::OwnedMutPtr;
+use libafl_bolts::tuples::Handle;
 use libafl_bolts::tuples::Handled;
 use libafl_bolts::tuples::MatchNameRef;
+use libafl_bolts::{rands::Rand, tuples::MatchName, Error, Named};
+use log::{debug, error, info};
+use quiche::{frame, packet, Connection, ConnectionId, Header};
+use ring::rand::*;
+use serde::{Deserialize, Serialize};
+use std::thread::sleep;
 
 use super::HasRecordRemote;
 
-#[derive( Serialize, Deserialize,Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MiscObserver {
     pub name: Cow<'static, str>,
     pub record_remote: bool,
@@ -52,10 +53,7 @@ impl MiscObserver {
         Ok(())
     }
 
-    pub fn post_execv(
-        &mut self,
-        _exit_kind: &ExitKind,
-    ) -> Result<(), Error> {
+    pub fn post_execv(&mut self, _exit_kind: &ExitKind) -> Result<(), Error> {
         // info!("post_exec of MiscObserver: {:?}", self);
         Ok(())
     }
@@ -65,7 +63,6 @@ impl<S> Observer<S> for MiscObserver
 where
     S: UsesInput + HasRand,
 {
-
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
         if !self.record_remote() {
             self.srand_seed = 0;
@@ -90,11 +87,9 @@ impl Named for MiscObserver {
     }
 }
 
-
 #[allow(clippy::unsafe_derive_deserialize)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DifferentialMiscObserver {
-
     first_name: Cow<'static, str>,
     second_name: Cow<'static, str>,
     first_ob_ref: Handle<MiscObserver>,
@@ -107,10 +102,7 @@ pub struct DifferentialMiscObserver {
 
 impl DifferentialMiscObserver {
     /// Create a new `DifferentialMiscObserver`.
-    pub fn new (
-        first: &mut MiscObserver,
-        second: &mut MiscObserver,
-    ) -> Self {
+    pub fn new(first: &mut MiscObserver, second: &mut MiscObserver) -> Self {
         Self {
             first_name: first.name().clone(),
             second_name: second.name().clone(),
@@ -120,7 +112,6 @@ impl DifferentialMiscObserver {
             second_observer: MiscObserver::new("fake"),
             second_ob_ref: second.handle(),
             srand_seed: 0,
-
         }
     }
 
@@ -132,13 +123,12 @@ impl DifferentialMiscObserver {
         &self.second_name
     }
 
-    pub fn perform_judge (&mut self) {
+    pub fn perform_judge(&mut self) {
         self.srand_seed = self.first_observer.srand_seed;
         info!("Fir:{:?}", self.first_observer);
         info!("Sec:{:?}", self.second_observer);
         self.first_observer = MiscObserver::new("fake");
         self.second_observer = MiscObserver::new("fake");
-
     }
 }
 
@@ -150,8 +140,7 @@ impl Named for DifferentialMiscObserver {
 
 impl<S> Observer<S> for DifferentialMiscObserver where S: UsesInput {}
 
-impl< OTA, OTB, S> DifferentialObserver<OTA, OTB, S>
-    for DifferentialMiscObserver
+impl<OTA, OTB, S> DifferentialObserver<OTA, OTB, S> for DifferentialMiscObserver
 where
     OTA: ObserversTuple<S>,
     OTB: ObserversTuple<S>,

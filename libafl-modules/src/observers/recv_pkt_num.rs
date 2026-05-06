@@ -1,37 +1,35 @@
+use crate::inputstruct::*;
+use libafl::inputs::HasMutatorBytes;
+use libafl::observers::{DifferentialObserver, Observer, ObserversTuple};
+use libafl::{executors::ExitKind, inputs::UsesInput, state::UsesState};
+use libafl_bolts::ownedref::OwnedMutPtr;
+use libafl_bolts::tuples::{Handle, Handled};
+use libafl_bolts::{tuples::MatchName, tuples::MatchNameRef, Error, Named};
+use log::{debug, info};
+use num_traits::abs;
+use quiche::frame::Frame;
+use quiche::range_buf::RangeBuf;
+use quiche::{frame, packet, Connection, ConnectionId, FrameWithPkn, Header};
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cmp::max;
-use libafl::inputs::HasMutatorBytes;
-use libafl_bolts::ownedref::OwnedMutPtr;
-use quiche::frame::Frame;
-use quiche::stream::RangeBuf;
-use std::{mem};
-use num_traits::abs;
-use log::{debug, info};
-use serde::{Deserialize, Serialize};
-use libafl::{executors::ExitKind, inputs::UsesInput, state::UsesState};
-use quiche::{frame, packet, Connection, ConnectionId, FrameWithPkn, Header};
-use crate::inputstruct::*;
-use libafl_bolts::tuples::{Handle, Handled};
-use libafl_bolts::{Error, Named,tuples::MatchName,tuples::MatchNameRef};
-use libafl::{
-    observers::{DifferentialObserver, Observer, ObserversTuple},
-};
+use std::mem;
 
 use super::HasRecordRemote;
 
-#[derive(Debug, Serialize, Deserialize,Clone,PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Frame_info {
     pub frame: frame::Frame,
     pub frame_num: usize,
 }
 
-#[derive(Debug, Serialize, Deserialize,Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Ack_range {
     start: u64,
     end: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize,Clone,PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum CtrlObserverState {
     OK = 0,
     CrtlFrame1TypeMismatch = 1,
@@ -39,7 +37,7 @@ pub enum CtrlObserverState {
     CtrlFrameTypeNumMismatch = 1 << 2,
     CtrlFrameContentMismatch = 1 << 3,
 }
-#[derive(Debug, Serialize, Deserialize,Clone,PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum DataObserverState {
     OK = 0,
     DataFrame1TypeMismatch = 1,
@@ -50,23 +48,20 @@ pub enum DataObserverState {
     DataFrameStreamContentLenMismatch = 1 << 5,
     DataFramePRContentMismatch = 1 << 6,
     DataFrameDgramContentMismatch = 1 << 7,
-
 }
-#[derive(Debug, Serialize, Deserialize,Clone,PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum ACKObserverState {
     OK = 0,
     ACKRangeMismatch = 1,
     ACKRangeNumMismatch = 1 << 1,
 }
-#[derive(Debug, Serialize, Deserialize,Clone,PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum OtherObserverState {
     OK = 0,
-    OtherFrameTypeMismatch = 1 ,
+    OtherFrameTypeMismatch = 1,
     OtherFrameTypeNumMismatch = 1 << 2,
     OtherFrameContentMismatch = 1 << 3,
-
 }
-
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RecvPktNumObserver {
@@ -123,14 +118,10 @@ impl RecvPktNumObserver {
         }
         Ok(())
     }
-    pub fn post_execv(
-        &mut self,
-        _exit_kind: &ExitKind,
-    ) -> Result<(), Error> {
+    pub fn post_execv(&mut self, _exit_kind: &ExitKind) -> Result<(), Error> {
         debug!("post_exec of RecvPktNumObserver: {:?}", self);
         Ok(())
     }
-
 }
 impl<S> Observer<S> for RecvPktNumObserver
 where
@@ -160,7 +151,6 @@ impl Named for RecvPktNumObserver {
         &self.name
     }
 }
-
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 
@@ -204,10 +194,7 @@ impl RecvControlFrameObserver {
         }
         Ok(())
     }
-    pub fn post_execv(
-        &mut self,
-        _exit_kind: &ExitKind,
-    ) -> Result<(), Error> {
+    pub fn post_execv(&mut self, _exit_kind: &ExitKind) -> Result<(), Error> {
         // info!("post_exec of RecvControlFrameObserver: {:?}", self);
         Ok(())
     }
@@ -237,7 +224,6 @@ impl Named for RecvControlFrameObserver {
         &self.name
     }
 }
-
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 
@@ -295,10 +281,7 @@ impl RecvDataFrameObserver {
         }
         Ok(())
     }
-    pub fn post_execv(
-        &mut self,
-        _exit_kind: &ExitKind,
-    ) -> Result<(), Error> {
+    pub fn post_execv(&mut self, _exit_kind: &ExitKind) -> Result<(), Error> {
         debug!("post_exec of RecvDataFrameObserver: {:?}", self);
         // info!("post_exec of RecvDataFrameObserver: crypto:{:?}, stream:{:?}, pr:{:?}, dgram:{:?}", self.crypto_frames_list.len(), self.stream_frames_list.len(), self.pr_frames_list.len(), self.dgram_frames_list.len());
         Ok(())
@@ -334,7 +317,6 @@ impl Named for RecvDataFrameObserver {
         &self.name
     }
 }
-
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 
@@ -395,8 +377,6 @@ impl Named for OtherFrameObserver {
     }
 }
 
-
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 
 pub struct ACKRangeObserver {
@@ -419,7 +399,7 @@ impl ACKRangeObserver {
     pub fn get_ack_ranges(&self) -> &Vec<Ack_range> {
         &self.ack_ranges
     }
-    pub fn add_ACK_range(&mut self, start:u64 ,end:u64) {
+    pub fn add_ACK_range(&mut self, start: u64, end: u64) {
         self.ack_ranges_nums += 1;
         self.ack_ranges.push(Ack_range {
             start: start,
@@ -444,7 +424,7 @@ impl ACKRangeObserver {
             i += 1;
         }
     }
-    pub fn minimize_ACK_range(& self) -> Vec<Ack_range> {
+    pub fn minimize_ACK_range(&self) -> Vec<Ack_range> {
         let mut ack_ranges = self.ack_ranges.clone();
         let mut ack_ranges_nums = self.ack_ranges_nums;
         let mut i = 0;
@@ -470,10 +450,7 @@ impl ACKRangeObserver {
         }
         Ok(())
     }
-    pub fn post_execv(
-        &mut self,
-        _exit_kind: &ExitKind,
-    ) -> Result<(), Error> {
+    pub fn post_execv(&mut self, _exit_kind: &ExitKind) -> Result<(), Error> {
         if !self.record_remote() {
             self.minimize_ACK_range_mut();
             // info!("post_exec of ACKRangeObserver: {:?}", self);
@@ -511,12 +488,10 @@ impl Named for ACKRangeObserver {
     }
 }
 
-
 #[allow(clippy::unsafe_derive_deserialize)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 
 pub struct DifferentialRecvControlFrameObserver {
-
     first_name: Cow<'static, str>,
     second_name: Cow<'static, str>,
     first_ob_ref: Handle<RecvControlFrameObserver>,
@@ -528,7 +503,7 @@ pub struct DifferentialRecvControlFrameObserver {
 }
 impl DifferentialRecvControlFrameObserver {
     /// Create a new `DifferentialRecvControlFrameObserver`.
-    pub fn new (
+    pub fn new(
         first: &mut RecvControlFrameObserver,
         second: &mut RecvControlFrameObserver,
     ) -> Self {
@@ -555,11 +530,11 @@ impl DifferentialRecvControlFrameObserver {
     pub fn get_ctrl_frames(&self) -> Vec<Frame_info> {
         self.first_observer.ctrl_frames_list.clone()
     }
-    pub fn perform_judge (&mut self) {
+    pub fn perform_judge(&mut self) {
         for frame_info1 in self.first_observer.ctrl_frames_list.iter() {
             let mut frame1_match = false;
             for frame_info2 in self.second_observer.ctrl_frames_list.iter() {
-                if  mem::discriminant(&frame_info1.frame) == mem::discriminant(&frame_info2.frame) {
+                if mem::discriminant(&frame_info1.frame) == mem::discriminant(&frame_info2.frame) {
                     frame1_match = true;
                     if abs(frame_info1.frame_num as i64 - frame_info2.frame_num as i64) > 50 {
                         self.judge_type = CtrlObserverState::CtrlFrameTypeNumMismatch;
@@ -577,7 +552,7 @@ impl DifferentialRecvControlFrameObserver {
         for frame_info2 in self.second_observer.ctrl_frames_list.iter() {
             let mut frame2_match = false;
             for frame_info1 in self.first_observer.ctrl_frames_list.iter() {
-                if  mem::discriminant(&frame_info1.frame) == mem::discriminant(&frame_info2.frame) {
+                if mem::discriminant(&frame_info1.frame) == mem::discriminant(&frame_info2.frame) {
                     frame2_match = true;
                     break;
                 }
@@ -601,8 +576,7 @@ impl Named for DifferentialRecvControlFrameObserver {
     }
 }
 impl<S> Observer<S> for DifferentialRecvControlFrameObserver where S: UsesInput {}
-impl< OTA, OTB, S> DifferentialObserver<OTA, OTB, S>
-    for DifferentialRecvControlFrameObserver
+impl<OTA, OTB, S> DifferentialObserver<OTA, OTB, S> for DifferentialRecvControlFrameObserver
 where
     OTA: ObserversTuple<S>,
     OTB: ObserversTuple<S>,
@@ -635,12 +609,10 @@ where
     }
 }
 
-
 #[allow(clippy::unsafe_derive_deserialize)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 
 pub struct DifferentialRecvDataFrameObserver {
-
     first_name: Cow<'static, str>,
     second_name: Cow<'static, str>,
     first_ob_ref: Handle<RecvDataFrameObserver>,
@@ -652,10 +624,7 @@ pub struct DifferentialRecvDataFrameObserver {
 }
 impl DifferentialRecvDataFrameObserver {
     /// Create a new `DifferentialRecvDataFrameObserver`.
-    pub fn new (
-        first: &mut RecvDataFrameObserver,
-        second: &mut RecvDataFrameObserver,
-    ) -> Self {
+    pub fn new(first: &mut RecvDataFrameObserver, second: &mut RecvDataFrameObserver) -> Self {
         Self {
             first_name: first.name().clone(),
             second_name: second.name().clone(),
@@ -682,17 +651,29 @@ impl DifferentialRecvDataFrameObserver {
         self.second_observer = RecvDataFrameObserver::new("fake");
     }
 
-    pub fn check_data_frame_type_num (&mut self) -> bool {
-        if abs(self.first_observer.crypto_frames_list.len() as isize - self.second_observer.crypto_frames_list.len() as isize) >10{
+    pub fn check_data_frame_type_num(&mut self) -> bool {
+        if abs(self.first_observer.crypto_frames_list.len() as isize
+            - self.second_observer.crypto_frames_list.len() as isize)
+            > 10
+        {
             self.judge_type = DataObserverState::DataFrameTypeNumMismatch;
             return false;
-        } else if abs(self.first_observer.stream_frames_list.len() as isize - self.second_observer.stream_frames_list.len() as isize) >10 {
+        } else if abs(self.first_observer.stream_frames_list.len() as isize
+            - self.second_observer.stream_frames_list.len() as isize)
+            > 10
+        {
             self.judge_type = DataObserverState::DataFrameTypeNumMismatch;
             return false;
-        } else if abs(self.first_observer.pr_frames_list.len() as isize - self.second_observer.pr_frames_list.len() as isize) >10 {
+        } else if abs(self.first_observer.pr_frames_list.len() as isize
+            - self.second_observer.pr_frames_list.len() as isize)
+            > 10
+        {
             self.judge_type = DataObserverState::DataFrameTypeNumMismatch;
             return false;
-        } else if abs(self.first_observer.dgram_frames_list.len() as isize - self.second_observer.dgram_frames_list.len() as isize) >10 {
+        } else if abs(self.first_observer.dgram_frames_list.len() as isize
+            - self.second_observer.dgram_frames_list.len() as isize)
+            > 10
+        {
             self.judge_type = DataObserverState::DataFrameTypeNumMismatch;
             return false;
         } else {
@@ -700,14 +681,14 @@ impl DifferentialRecvDataFrameObserver {
         }
     }
 
-    pub fn check_crypto_frame_content (&mut self) -> bool {
+    pub fn check_crypto_frame_content(&mut self) -> bool {
         let mut first_crypto_data_len = 0;
         let mut second_crypto_data_len = 0;
         for crypto_frame in self.first_observer.crypto_frames_list.iter() {
             match &crypto_frame.frame {
                 Frame::Crypto { data } => {
-                    first_crypto_data_len += data.data.len();
-                },
+                    first_crypto_data_len += data.data.as_ref().len();
+                }
                 _ => {
                     // 处理其他类型的frame
                     debug!("Not a Crypto frame");
@@ -717,8 +698,8 @@ impl DifferentialRecvDataFrameObserver {
         for crypto_frame in self.second_observer.crypto_frames_list.iter() {
             match &crypto_frame.frame {
                 Frame::Crypto { data } => {
-                    second_crypto_data_len += data.data.len();
-                },
+                    second_crypto_data_len += data.data.as_ref().len();
+                }
                 _ => {
                     // 处理其他类型的frame
                     debug!("Not a Crypto frame");
@@ -740,7 +721,7 @@ impl DifferentialRecvDataFrameObserver {
         for first_stream_frame in self.first_observer.stream_frames_list.iter() {
             match &first_stream_frame.frame {
                 Frame::Stream { data, stream_id } => {
-                    first_stream_data_len += data.data.len();
+                    first_stream_data_len += data.data.as_ref().len();
                     let val1 = data.data.clone();
                     let start1 = data.off;
                     let mut match_second_stream = false;
@@ -749,11 +730,11 @@ impl DifferentialRecvDataFrameObserver {
                             Frame::Stream { data, stream_id } => {
                                 let val2 = data.data.clone();
                                 let start2 = data.off;
-                                if val1 == val2 && start1 == start2 {
+                                if val1.as_ref() == val2.as_ref() && start1 == start2 {
                                     match_second_stream = true;
                                     break;
                                 }
-                            },
+                            }
                             _ => {
                                 // 处理其他类型的frame
                                 debug!("Not a Stream frame");
@@ -761,9 +742,9 @@ impl DifferentialRecvDataFrameObserver {
                         }
                     }
                     if match_second_stream == false {
-                        first_stream_data_dismatch_len += val1.len();
+                        first_stream_data_dismatch_len += val1.as_ref().len();
                     }
-                },
+                }
                 _ => {
                     // 处理其他类型的frame
                     debug!("Not a Stream frame");
@@ -773,7 +754,7 @@ impl DifferentialRecvDataFrameObserver {
         for second_stream_frame in self.second_observer.stream_frames_list.iter() {
             match &second_stream_frame.frame {
                 Frame::Stream { data, stream_id } => {
-                    second_stream_data_len += data.data.len();
+                    second_stream_data_len += data.data.as_ref().len();
                     let val2 = data.data.clone();
                     let start2 = data.off;
                     let mut match_first_stream = false;
@@ -782,11 +763,11 @@ impl DifferentialRecvDataFrameObserver {
                             Frame::Stream { data, stream_id } => {
                                 let val1 = data.data.clone();
                                 let start1 = data.off;
-                                if val1 == val2 && start1 == start2 {
+                                if val1.as_ref() == val2.as_ref() && start1 == start2 {
                                     match_first_stream = true;
                                     break;
                                 }
-                            },
+                            }
                             _ => {
                                 // 处理其他类型的frame
                                 debug!("Not a Stream frame");
@@ -794,9 +775,9 @@ impl DifferentialRecvDataFrameObserver {
                         }
                     }
                     if match_first_stream == false {
-                        second_stream_data_dismatch_len += val2.len();
+                        second_stream_data_dismatch_len += val2.as_ref().len();
                     }
-                },
+                }
                 _ => {
                     // 处理其他类型的frame
                     debug!("Not a Stream frame");
@@ -812,7 +793,6 @@ impl DifferentialRecvDataFrameObserver {
             return false;
         }
         return true;
-
     }
 
     pub fn check_pr_frame_content(&mut self) -> bool {
@@ -831,7 +811,7 @@ impl DifferentialRecvDataFrameObserver {
                                     match_second_pr = true;
                                     break;
                                 }
-                            },
+                            }
                             _ => {
                                 // 处理其他类型的frame
                                 debug!("Not a PathResponse frame");
@@ -844,7 +824,7 @@ impl DifferentialRecvDataFrameObserver {
                         // self.judge_type = DataObserverState::DataFramePRContentMismatch;
                         // return false;
                     }
-                },
+                }
                 _ => {
                     // 处理其他类型的frame
                     debug!("Not a Padding frame");
@@ -864,7 +844,7 @@ impl DifferentialRecvDataFrameObserver {
                                     match_first_pr = true;
                                     break;
                                 }
-                            },
+                            }
                             _ => {
                                 // 处理其他类型的frame
                                 debug!("Not a PathResponse frame");
@@ -877,7 +857,7 @@ impl DifferentialRecvDataFrameObserver {
                         // self.judge_type = DataObserverState::DataFramePRContentMismatch;
                         // return false;
                     }
-                },
+                }
                 _ => {
                     // 处理其他类型的frame
                     debug!("Not a Padding frame");
@@ -905,7 +885,7 @@ impl DifferentialRecvDataFrameObserver {
                                     match_second_dgram = true;
                                     break;
                                 }
-                            },
+                            }
                             _ => {
                                 // 处理其他类型的frame
                                 debug!("Not a Datagram frame");
@@ -916,7 +896,7 @@ impl DifferentialRecvDataFrameObserver {
                         self.judge_type = DataObserverState::DataFrameDgramContentMismatch;
                         return false;
                     }
-                },
+                }
                 _ => {
                     // 处理其他类型的frame
                     debug!("Not a Datagram frame");
@@ -936,7 +916,7 @@ impl DifferentialRecvDataFrameObserver {
                                     match_first_dgram = true;
                                     break;
                                 }
-                            },
+                            }
                             _ => {
                                 // 处理其他类型的frame
                                 debug!("Not a Datagram frame");
@@ -947,7 +927,7 @@ impl DifferentialRecvDataFrameObserver {
                         self.judge_type = DataObserverState::DataFrameDgramContentMismatch;
                         return false;
                     }
-                },
+                }
                 _ => {
                     // 处理其他类型的frame
                     debug!("Not a Datagram frame");
@@ -957,18 +937,28 @@ impl DifferentialRecvDataFrameObserver {
         return true;
     }
 
-    pub fn perform_judge (&mut self) {
-
+    pub fn perform_judge(&mut self) {
         if self.check_data_frame_type_num() == false {
         } else if self.check_crypto_frame_content() == false {
         } else if self.check_stream_frame_content() == false {
         } else if self.check_pr_frame_content() == false {
         } else if self.check_dgram_frame_content() == false {
         }
-        info!("FirDataOb: crypto:{:?}, stream:{:?}, pr:{:?}, dgram:{:?}", self.first_observer.crypto_frames_list.len(), self.first_observer.stream_frames_list.len(), self.first_observer.pr_frames_list.len(), self.first_observer.dgram_frames_list.len());
-        info!("SecDataOb: crypto:{:?}, stream:{:?}, pr:{:?}, dgram:{:?}", self.second_observer.crypto_frames_list.len(), self.second_observer.stream_frames_list.len(), self.second_observer.pr_frames_list.len(), self.second_observer.dgram_frames_list.len());
+        info!(
+            "FirDataOb: crypto:{:?}, stream:{:?}, pr:{:?}, dgram:{:?}",
+            self.first_observer.crypto_frames_list.len(),
+            self.first_observer.stream_frames_list.len(),
+            self.first_observer.pr_frames_list.len(),
+            self.first_observer.dgram_frames_list.len()
+        );
+        info!(
+            "SecDataOb: crypto:{:?}, stream:{:?}, pr:{:?}, dgram:{:?}",
+            self.second_observer.crypto_frames_list.len(),
+            self.second_observer.stream_frames_list.len(),
+            self.second_observer.pr_frames_list.len(),
+            self.second_observer.dgram_frames_list.len()
+        );
         self.set_initial_observer();
-
     }
 }
 impl Named for DifferentialRecvDataFrameObserver {
@@ -977,8 +967,7 @@ impl Named for DifferentialRecvDataFrameObserver {
     }
 }
 impl<S> Observer<S> for DifferentialRecvDataFrameObserver where S: UsesInput {}
-impl< OTA, OTB, S> DifferentialObserver<OTA, OTB, S>
-    for DifferentialRecvDataFrameObserver
+impl<OTA, OTB, S> DifferentialObserver<OTA, OTB, S> for DifferentialRecvDataFrameObserver
 where
     OTA: ObserversTuple<S>,
     OTB: ObserversTuple<S>,
@@ -1011,12 +1000,10 @@ where
     }
 }
 
-
 #[allow(clippy::unsafe_derive_deserialize)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 
 pub struct DifferentialOtherFrameObserver {
-
     first_name: Cow<'static, str>,
     second_name: Cow<'static, str>,
     first_ob_ref: Handle<OtherFrameObserver>,
@@ -1028,10 +1015,7 @@ pub struct DifferentialOtherFrameObserver {
 }
 impl DifferentialOtherFrameObserver {
     /// Create a new `DifferentialOtherFrameObserver`.
-    pub fn new (
-        first: &mut OtherFrameObserver,
-        second: &mut OtherFrameObserver,
-    ) -> Self {
+    pub fn new(first: &mut OtherFrameObserver, second: &mut OtherFrameObserver) -> Self {
         Self {
             first_name: first.name().clone(),
             second_name: second.name().clone(),
@@ -1052,11 +1036,11 @@ impl DifferentialOtherFrameObserver {
     pub fn get_judge_type(&self) -> OtherObserverState {
         self.judge_type.clone()
     }
-    pub fn perform_judge (&mut self) {
+    pub fn perform_judge(&mut self) {
         for frame_info1 in self.first_observer.other_frames_list.iter() {
             let mut frame1_match = false;
             for frame_info2 in self.second_observer.other_frames_list.iter() {
-                if  mem::discriminant(&frame_info1.frame) == mem::discriminant(&frame_info2.frame) {
+                if mem::discriminant(&frame_info1.frame) == mem::discriminant(&frame_info2.frame) {
                     frame1_match = true;
                     if frame_info1.frame_num != frame_info2.frame_num {
                         self.judge_type = OtherObserverState::OtherFrameTypeNumMismatch;
@@ -1069,7 +1053,9 @@ impl DifferentialOtherFrameObserver {
                 break;
             }
         }
-        if self.first_observer.other_frames_list.len() != self.second_observer.other_frames_list.len() {
+        if self.first_observer.other_frames_list.len()
+            != self.second_observer.other_frames_list.len()
+        {
             self.judge_type = OtherObserverState::OtherFrameTypeMismatch;
         }
 
@@ -1083,8 +1069,7 @@ impl Named for DifferentialOtherFrameObserver {
     }
 }
 impl<S> Observer<S> for DifferentialOtherFrameObserver where S: UsesInput {}
-impl< OTA, OTB, S> DifferentialObserver<OTA, OTB, S>
-    for DifferentialOtherFrameObserver
+impl<OTA, OTB, S> DifferentialObserver<OTA, OTB, S> for DifferentialOtherFrameObserver
 where
     OTA: ObserversTuple<S>,
     OTB: ObserversTuple<S>,
@@ -1112,18 +1097,15 @@ where
         self.second_observer = second_observer.clone();
         if self.first_observer.name() != "fake" {
             self.perform_judge();
-            
         }
         Ok(())
     }
 }
 
-
 #[allow(clippy::unsafe_derive_deserialize)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 
 pub struct DifferentialACKRangeObserver {
-
     first_name: Cow<'static, str>,
     second_name: Cow<'static, str>,
     first_ob_ref: Handle<ACKRangeObserver>,
@@ -1135,10 +1117,7 @@ pub struct DifferentialACKRangeObserver {
 }
 impl DifferentialACKRangeObserver {
     /// Create a new `DifferentialACKRangeObserver`.
-    pub fn new (
-        first: &mut ACKRangeObserver,
-        second: &mut ACKRangeObserver,
-    ) -> Self {
+    pub fn new(first: &mut ACKRangeObserver, second: &mut ACKRangeObserver) -> Self {
         Self {
             first_name: first.name().clone(),
             second_name: second.name().clone(),
@@ -1159,7 +1138,7 @@ impl DifferentialACKRangeObserver {
     pub fn judge_type(&self) -> &ACKObserverState {
         &self.judge_type
     }
-    pub fn perform_judge (&mut self) {
+    pub fn perform_judge(&mut self) {
         info!("FirACKOb:{:?}", self.first_observer);
         info!("SecACKOb:{:?}", self.second_observer);
         self.first_observer = ACKRangeObserver::new("fake");
@@ -1174,7 +1153,6 @@ impl DifferentialACKRangeObserver {
         let second_end_pos = second_list.iter().map(|r| r.end).max().unwrap_or(0);
         //预申请全0的数组，长度是first_end_pos与second_end_pos的最大值加1
         let mut match_list = vec![0; (first_end_pos.max(second_end_pos) + 1) as usize];
-        
 
         for first_range in first_list.iter() {
             first_acks += (first_range.end - first_range.start + 1) as usize;
@@ -1188,23 +1166,22 @@ impl DifferentialACKRangeObserver {
                 match_list[pos as usize] += 1;
             }
         }
-        info!("fir_ack: {:?}, sec_ack: {:?}",first_acks,second_acks);
+        info!("fir_ack: {:?}, sec_ack: {:?}", first_acks, second_acks);
         if abs(first_acks as i64 - second_acks as i64) > 100 {
             self.judge_type = ACKObserverState::ACKRangeNumMismatch;
             return;
         }
-        let mut dismatch_nums  = 0;
+        let mut dismatch_nums = 0;
         for i in 0..match_list.len() {
             if match_list[i] == 1 {
-                dismatch_nums +=1;
+                dismatch_nums += 1;
             }
         }
-        info!("ACK dismatch nums: {:?}",dismatch_nums);
-        if dismatch_nums -  abs(first_acks as i64 - second_acks as i64) > 50 {
+        info!("ACK dismatch nums: {:?}", dismatch_nums);
+        if dismatch_nums - abs(first_acks as i64 - second_acks as i64) > 50 {
             self.judge_type = ACKObserverState::ACKRangeMismatch;
             return;
         }
-
     }
 }
 impl Named for DifferentialACKRangeObserver {
@@ -1213,8 +1190,7 @@ impl Named for DifferentialACKRangeObserver {
     }
 }
 impl<S> Observer<S> for DifferentialACKRangeObserver where S: UsesInput {}
-impl< OTA, OTB, S> DifferentialObserver<OTA, OTB, S>
-    for DifferentialACKRangeObserver
+impl<OTA, OTB, S> DifferentialObserver<OTA, OTB, S> for DifferentialACKRangeObserver
 where
     OTA: ObserversTuple<S>,
     OTB: ObserversTuple<S>,

@@ -1,6 +1,6 @@
 use std::borrow::Cow;
-use std::time::Duration;
 use std::net::ToSocketAddrs;
+use std::time::Duration;
 
 use std::io::prelude::*;
 
@@ -8,22 +8,23 @@ use std::rc::Rc;
 
 use std::cell::RefCell;
 
-
-use libafl::inputs::HasMutatorBytes;
-use libafl_bolts::ownedref::OwnedMutPtr;
-use libafl_bolts::{Error, Named,tuples::MatchName, rands::Rand,};
-use log::{debug, error, info};
-use rand::Rng;
-use serde::{Deserialize, Serialize};
-use libafl::{executors::ExitKind, inputs::UsesInput,observers::Observer, state::UsesState,state::HasRand};
-use quiche::{frame, packet, Connection, ConnectionId, Header};
 use crate::inputstruct::*;
 use crate::misc::*;
+use libafl::inputs::HasMutatorBytes;
+use libafl::{
+    executors::ExitKind, inputs::UsesInput, observers::Observer, state::HasRand, state::UsesState,
+};
+use libafl_bolts::ownedref::OwnedMutPtr;
+use libafl_bolts::{rands::Rand, tuples::MatchName, Error, Named};
+use log::{debug, error, info};
+use quiche::{frame, packet, Connection, ConnectionId, Header};
+use rand::Rng;
+use serde::{Deserialize, Serialize};
 use std::thread::sleep;
 
 use super::HasRecordRemote;
 
-#[derive( Serialize, Deserialize,Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct UCBObserver {
     pub name: Cow<'static, str>,
     pub record_remote: bool,
@@ -50,10 +51,7 @@ impl UCBObserver {
         Ok(())
     }
 
-    pub fn post_execv(
-        &mut self,
-        _exit_kind: &ExitKind,
-    ) -> Result<(), Error> {
+    pub fn post_execv(&mut self, _exit_kind: &ExitKind) -> Result<(), Error> {
         if !self.record_remote() {
             debug!("post_exec of UCBObserver: {:?}", self);
             let mut rng = rand::thread_rng();
@@ -70,7 +68,6 @@ impl<S> Observer<S> for UCBObserver
 where
     S: UsesInput + HasRand,
 {
-
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
         if !self.record_remote() {
             self.reward = 0.0;

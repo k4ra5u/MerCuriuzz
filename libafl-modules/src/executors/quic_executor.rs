@@ -1,14 +1,22 @@
-use std::{
-    any::Any, env, ffi::{OsStr, OsString}, fs::File, io::{self, prelude::*, BufRead, ErrorKind, Read, Write}, os::{
-        fd::{AsRawFd, BorrowedFd},
-        unix::{io::RawFd, process::CommandExt},
-    }, path::Path, process::{Child, Command, Output, Stdio}, str, thread::sleep, time::Duration, vec
+use libafl::{
+    corpus::Corpus,
+    executors::{Executor, ExitKind, HasObservers},
+    inputs::HasTargetBytes,
+    observers::{
+        get_asan_runtime_flags_with_log_path, AsanBacktraceObserver, ObserversTuple, UsesObservers,
+    },
+    prelude::{multi_map, HitcountsIterableMapObserver, MapObserver, MultiMapObserver},
+    state::{HasCorpus, HasExecutions, HasRandSeed, HasSolutions, State, UsesState},
 };
-use std::num::ParseIntError;
-use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng};
+use libafl_bolts::{
+    rands,
+    shmem::{ShMem, ShMemId, ShMemProvider, UnixShMemProvider},
+    tuples::{Handle, Handled, MatchName, MatchNameRef, Prepend, RefIndexable},
+    AsSlice, AsSliceMut, Truncate,
+};
 use libc::{rand, srand, ETH_DATA_LEN};
 use libc::{CODA_SUPER_MAGIC, ERA};
+use log::{debug, error, info, warn};
 use nix::{
     sys::{
         select::{pselect, FdSet},
@@ -18,27 +26,42 @@ use nix::{
     },
     unistd::Pid,
 };
-use libafl::{
-    corpus::Corpus, executors::{
-        Executor, ExitKind, HasObservers
-    }, inputs::HasTargetBytes, observers::{
-        get_asan_runtime_flags_with_log_path, AsanBacktraceObserver, ObserversTuple, UsesObservers
-    }, prelude::{multi_map, HitcountsIterableMapObserver, MapObserver, MultiMapObserver}, state::{
-        HasCorpus, HasExecutions, HasRandSeed, HasSolutions, State, UsesState
-    }
-};
-use libafl_bolts::{
-    rands, shmem::{ShMem, ShMemId, ShMemProvider, UnixShMemProvider}, tuples::{Handle, Handled,MatchName ,MatchNameRef, Prepend, RefIndexable}, AsSlice, AsSliceMut, Truncate
-};
-use std::net::{SocketAddr, ToSocketAddrs};
+use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng};
 use ring::rand::*;
-use log::{error, info,debug,warn};
+use std::net::{SocketAddr, ToSocketAddrs};
+use std::num::ParseIntError;
+use std::{
+    any::Any,
+    env,
+    ffi::{OsStr, OsString},
+    fs::File,
+    io::{self, prelude::*, BufRead, ErrorKind, Read, Write},
+    os::{
+        fd::{AsRawFd, BorrowedFd},
+        unix::{io::RawFd, process::CommandExt},
+    },
+    path::Path,
+    process::{Child, Command, Output, Stdio},
+    str,
+    thread::sleep,
+    time::Duration,
+    vec,
+};
 
-use quiche::{frame::{self, EcnCounts, Frame, MAX_STREAM_SIZE}, packet, ranges::{self, RangeSet}, stream, Connection, ConnectionId, Error, FrameWithPkn, Header};
+use quiche::{
+    frame::{self, EcnCounts, Frame, MAX_STREAM_SIZE},
+    packet,
+    ranges::{self, RangeSet},
+    stream, Connection, ConnectionId, Error, FrameWithPkn, Header,
+};
 
-use crate::inputstruct::{pkt_resort_type, quic_input::InputStruct_deserialize, FramesCycleStruct, InputStruct, QuicStruct};
-use crate::observers::*;
+use crate::inputstruct::{
+    pkt_resort_type, quic_input::InputStruct_deserialize, FramesCycleStruct, InputStruct,
+    QuicStruct,
+};
 use crate::misc::*;
+use crate::observers::*;
 
 //use crate::QuicStruct;
 // use quic_input::{FramesCycleStruct, InputStruct, pkt_resort_type, QuicStruct};
@@ -49,8 +72,10 @@ const HTTP_REQ_STREAM_ID: u64 = 4;
 
 /// For experiment only, please use `STNyxExecutor` in production.
 
-
-pub fn start_harness_with_envs(command: &str, envs: Vec<(OsString, OsString)>) -> Result<Output, std::io::Error> {
+pub fn start_harness_with_envs(
+    command: &str,
+    envs: Vec<(OsString, OsString)>,
+) -> Result<Output, std::io::Error> {
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(command);
     for (key, value) in envs {
@@ -60,20 +85,21 @@ pub fn start_harness_with_envs(command: &str, envs: Vec<(OsString, OsString)>) -
 }
 
 /*
-    pub exit_kind: ExitKind,
-    pub normal_conn_ob: NormalConnObserver,
-    pub cc_time_ob: CCTimesObserver,
-    pub misc_ob: MiscObserver,
-    pub recv_pkt_num_ob: RecvPktNumObserver,
-    pub ack_range_ob: ACKRangeObserver,
-    pub control_frame_ob: RecvControlFrameObserver,
-    pub data_frame_ob: RecvDataFrameObserver,
-    pub cpu_usage_ob: CPUUsageObserver,
-    pub mem_usage_ob: MemObserver,
-    pub pcap_record_ob: PcapObserver,
-    pub ucb_ob: UCBObserver, */
+pub exit_kind: ExitKind,
+pub normal_conn_ob: NormalConnObserver,
+pub cc_time_ob: CCTimesObserver,
+pub misc_ob: MiscObserver,
+pub recv_pkt_num_ob: RecvPktNumObserver,
+pub ack_range_ob: ACKRangeObserver,
+pub control_frame_ob: RecvControlFrameObserver,
+pub data_frame_ob: RecvDataFrameObserver,
+pub cpu_usage_ob: CPUUsageObserver,
+pub mem_usage_ob: MemObserver,
+pub pcap_record_ob: PcapObserver,
+pub ucb_ob: UCBObserver, */
 pub struct QuicExecutor<OT, S, SP>
-where SP: ShMemProvider,
+where
+    SP: ShMemProvider,
 {
     pub start_command: String,
     pub judge_command: String,
@@ -103,13 +129,15 @@ where SP: ShMemProvider,
     pub ucb_ob_ref: Handle<UCBObserver>,
 }
 
-impl<OT, S,SP> QuicExecutor<OT, S,SP> 
-where 
-OT: ObserversTuple<S>,
-S: State, 
-SP: ShMemProvider,
+impl<OT, S, SP> QuicExecutor<OT, S, SP>
+where
+    OT: ObserversTuple<S>,
+    S: State,
+    SP: ShMemProvider,
 {
-    pub fn new(observers: OT,shmem_provider:SP,
+    pub fn new(
+        observers: OT,
+        shmem_provider: SP,
         normal_conn_ob_ref: Handle<NormalConnObserver>,
         cc_time_ob_ref: Handle<CCTimesObserver>,
         misc_ob_ref: Handle<MiscObserver>,
@@ -128,16 +156,16 @@ SP: ShMemProvider,
             envs: vec![],
             observers,
             phantom: std::marker::PhantomData,
-            map:None,
-            map_size:None,
+            map: None,
+            map_size: None,
             shmem_provider,
-            pid:0,
-            quic_shm_id:String::new() ,
-            quic_shm_size:0,
-            ob_shm_id:String::new(),
-            ob_shm_size:0,
-            frame_rand_seed:0,
-            remote_obs_data:None,
+            pid: 0,
+            quic_shm_id: String::new(),
+            quic_shm_size: 0,
+            ob_shm_id: String::new(),
+            ob_shm_size: 0,
+            frame_rand_seed: 0,
+            remote_obs_data: None,
             normal_conn_ob_ref,
             cc_time_ob_ref,
             misc_ob_ref,
@@ -149,25 +177,22 @@ SP: ShMemProvider,
             mem_usage_ob_ref,
             pcap_record_ob_ref,
             ucb_ob_ref,
-
         }
     }
 
-    pub fn start_command(mut self,str:String) -> Self {
+    pub fn start_command(mut self, str: String) -> Self {
         let base_dir = env::var("START_DIR").unwrap();
         self.start_command = format!("{base_dir}/{str}.sh");
-        info!("start_command: {:?}",self.start_command);
+        info!("start_command: {:?}", self.start_command);
         self
-
     }
 
-    pub fn judge_command(mut self,str:String) -> Self {
+    pub fn judge_command(mut self, str: String) -> Self {
         let base_dir = env::var("JUDGE_DIR").unwrap();
         self.judge_command = format!("{base_dir}/{str}-judge.sh");
-        info!("judge_command: {:?}",self.judge_command);
+        info!("judge_command: {:?}", self.judge_command);
         self
     }
-
 
     pub fn coverage_map_size(mut self, size: usize) -> Self {
         self.map_size = Some(size);
@@ -228,32 +253,39 @@ SP: ShMemProvider,
         self
     }
 
-    pub fn write_to_quic_shm_seed(&mut self, data: &[u8],seed: u32) {
-        let mut quic_shm = self.shmem_provider.shmem_from_id_and_size(
-            ShMemId::from_string(&format!("{}",self.quic_shm_id)),self.quic_shm_size)
+    pub fn write_to_quic_shm_seed(&mut self, data: &[u8], seed: u32) {
+        let mut quic_shm = self
+            .shmem_provider
+            .shmem_from_id_and_size(
+                ShMemId::from_string(&format!("{}", self.quic_shm_id)),
+                self.quic_shm_size,
+            )
             .unwrap();
         let quic_shm_buf = quic_shm.as_slice_mut();
 
-        quic_shm_buf[1..9].copy_from_slice( &data.len().to_be_bytes());
+        quic_shm_buf[1..9].copy_from_slice(&data.len().to_be_bytes());
         quic_shm_buf[9..13].copy_from_slice(&seed.to_be_bytes());
-        quic_shm_buf[13..13+data.len()].copy_from_slice(data);
+        quic_shm_buf[13..13 + data.len()].copy_from_slice(data);
         quic_shm_buf[0] = 1;
-    } 
+    }
     pub fn wait_for_quic_shm_res(&mut self) {
-        let mut quic_shm = self.shmem_provider.shmem_from_id_and_size(
-            ShMemId::from_string(&format!("{}",self.quic_shm_id)),self.quic_shm_size)
+        let mut quic_shm = self
+            .shmem_provider
+            .shmem_from_id_and_size(
+                ShMemId::from_string(&format!("{}", self.quic_shm_id)),
+                self.quic_shm_size,
+            )
             .unwrap();
         let quic_shm_buf = quic_shm.as_slice();
         while true {
-            if(quic_shm_buf[0] == 0) {
+            if (quic_shm_buf[0] == 0) {
                 break;
-            }
-            else {
+            } else {
                 sleep(Duration::from_millis(100));
             }
         }
-    } 
-    
+    }
+
     pub fn sync_normal_conn_ob(&mut self, normal_conn_ob: &NormalConnObserver) {
         if let Some(normal_conn) = self.observers.get_mut(&self.normal_conn_ob_ref) {
             normal_conn.pre_spend_time = normal_conn_ob.pre_spend_time;
@@ -280,14 +312,12 @@ SP: ShMemProvider,
             recv_pkt_num.recv_pkts = recv_pkt_num_ob.recv_pkts;
             recv_pkt_num.send_bytes = recv_pkt_num_ob.send_bytes;
             recv_pkt_num.recv_bytes = recv_pkt_num_ob.recv_bytes;
-
         }
     }
     pub fn sync_ack_range_ob(&mut self, ack_range_ob: &ACKRangeObserver) {
         if let Some(ack_range) = self.observers.get_mut(&self.ack_range_ob_ref) {
             ack_range.ack_ranges = ack_range_ob.ack_ranges.clone();
             ack_range.ack_ranges_nums = ack_range_ob.ack_ranges_nums;
-
         }
     }
     pub fn sync_control_frame_ob(&mut self, control_frame_ob: &RecvControlFrameObserver) {
@@ -301,7 +331,6 @@ SP: ShMemProvider,
             data_frame.stream_frames_list = data_frame_ob.stream_frames_list.clone();
             data_frame.pr_frames_list = data_frame_ob.pr_frames_list.clone();
             data_frame.dgram_frames_list = data_frame_ob.dgram_frames_list.clone();
-
         }
     }
     pub fn sync_cpu_usage_ob(&mut self, cpu_usage_ob: &CPUUsageObserver) {
@@ -312,11 +341,7 @@ SP: ShMemProvider,
     }
     pub fn sync_mem_usage_ob(&mut self, mem_usage_ob: &MemObserver) {
         if let Some(mem_usage) = self.observers.get_mut(&self.mem_usage_ob_ref) {
-            mem_usage.initial_mem = mem_usage_ob.initial_mem;
-            mem_usage.allowed_mem = mem_usage_ob.allowed_mem;
-            mem_usage.before_mem = mem_usage_ob.before_mem;
-            mem_usage.after_mem = mem_usage_ob.after_mem;
-
+            mem_usage.sync_from(mem_usage_ob);
         }
     }
     pub fn sync_pcap_record_ob(&mut self, pcap_record_ob: &PcapObserver) {
@@ -331,13 +356,17 @@ SP: ShMemProvider,
     }
 
     pub fn update_all_obs(&mut self) -> ExitKind {
-        let obs_shm = self.shmem_provider.shmem_from_id_and_size(
-            ShMemId::from_string(&format!("{}",self.ob_shm_id)),self.ob_shm_size)
+        let obs_shm = self
+            .shmem_provider
+            .shmem_from_id_and_size(
+                ShMemId::from_string(&format!("{}", self.ob_shm_id)),
+                self.ob_shm_size,
+            )
             .unwrap();
 
         let serde_obs_buf = obs_shm.as_slice();
         let obs_data = bincode::deserialize::<RemoteObsData>(&serde_obs_buf).unwrap();
-        info!("recive obs_data: \n{:?}\n\n",obs_data);
+        info!("recive obs_data: \n{:?}\n\n", obs_data);
         self.sync_normal_conn_ob(&obs_data.normal_conn_ob);
         self.sync_cc_time_ob(&obs_data.cc_time_ob);
         self.sync_misc_ob(&obs_data.misc_ob);
@@ -350,35 +379,31 @@ SP: ShMemProvider,
         self.sync_pcap_record_ob(&obs_data.pcap_record_ob);
         self.sync_ucb_ob(&obs_data.ucb_ob);
         obs_data.exit_kind
-
     }
-
-
-
 }
 
-impl<OT, S,SP> UsesState for QuicExecutor<OT, S, SP>
+impl<OT, S, SP> UsesState for QuicExecutor<OT, S, SP>
 where
-    S: State, 
-    SP: ShMemProvider
+    S: State,
+    SP: ShMemProvider,
 {
     type State = S;
 }
 
-impl<OT, S,SP> UsesObservers for QuicExecutor<OT, S,SP>
+impl<OT, S, SP> UsesObservers for QuicExecutor<OT, S, SP>
 where
     OT: ObserversTuple<S>,
     S: State,
-    SP: ShMemProvider
+    SP: ShMemProvider,
 {
     type Observers = OT;
 }
 
-impl<OT, S,SP> HasObservers for QuicExecutor<OT, S,SP>
+impl<OT, S, SP> HasObservers for QuicExecutor<OT, S, SP>
 where
     S: State,
     OT: ObserversTuple<S>,
-    SP: ShMemProvider
+    SP: ShMemProvider,
 {
     fn observers(&self) -> RefIndexable<&Self::Observers, Self::Observers> {
         RefIndexable::from(&self.observers)
@@ -389,14 +414,15 @@ where
     }
 }
 
-impl<EM, OT, S,SP, Z> Executor<EM, Z> for QuicExecutor<OT, S,SP>
+impl<EM, OT, S, SP, Z> Executor<EM, Z> for QuicExecutor<OT, S, SP>
 where
     EM: UsesState<State = S>,
-    S: State + HasExecutions + HasCorpus + HasSolutions +HasRandSeed,
+    S: State + HasExecutions + HasCorpus + HasSolutions + HasRandSeed,
     S::Input: HasTargetBytes,
     SP: ShMemProvider,
     OT: MatchName + ObserversTuple<S>,
-    Z: UsesState<State = S> {
+    Z: UsesState<State = S>,
+{
     fn run_target(
         &mut self,
         _fuzzer: &mut Z,
@@ -404,27 +430,28 @@ where
         _mgr: &mut EM,
         input: &Self::Input,
     ) -> Result<libafl::prelude::ExitKind, libafl::prelude::Error> {
-
         let mut is_first = false;
         if self.start_command.contains("lsquic.sh") {
             is_first = true;
         }
         if is_first {
-            self.frame_rand_seed = unsafe {rand().try_into().unwrap()};
+            self.frame_rand_seed = unsafe { rand().try_into().unwrap() };
             // info!("now {:?} corpus",state.corpus().count());
         }
         info!("running corpus: {:?}", state.corpus().current());
 
         *state.executions_mut() += 1;
 
-
-
         let binding = input.target_bytes();
-        let mut inputs = binding.as_slice();   
-        self.write_to_quic_shm_seed(&inputs,self.frame_rand_seed);
+        let mut inputs = binding.as_slice();
+        self.write_to_quic_shm_seed(&inputs, self.frame_rand_seed);
         self.wait_for_quic_shm_res();
         if is_first {
-            let multi_map_ob_handle = HitcountsIterableMapObserver::new(MultiMapObserver::new("combined-edges", Vec::<libafl_bolts::ownedref::OwnedMutSlice<u8>>::new())).handle();
+            let multi_map_ob_handle = HitcountsIterableMapObserver::new(MultiMapObserver::new(
+                "combined-edges",
+                Vec::<libafl_bolts::ownedref::OwnedMutSlice<u8>>::new(),
+            ))
+            .handle();
             let hit_multi_map_ob = self.observers.get(&multi_map_ob_handle).unwrap();
             let multi_map_ob = &hit_multi_map_ob.base;
             let map_fir = &multi_map_ob.maps[0];
@@ -444,8 +471,8 @@ where
             }
             let first_total = map_fir.as_slice().len();
             let sec_total = map_sec.as_slice().len();
-            warn!("cov_fir cnt/tot: {:?}/{:?}",first_count,first_total);
-            warn!("cov_sec cnt/tot: {:?}/{:?}",sec_count,sec_total);
+            warn!("cov_fir cnt/tot: {:?}/{:?}", first_count, first_total);
+            warn!("cov_sec cnt/tot: {:?}/{:?}", sec_count, sec_total);
         }
 
         let exit_kind = self.update_all_obs();

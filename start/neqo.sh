@@ -1,0 +1,1 @@
+LD_LIBRARY_PATH=/home/john/quic-fuzz/newest/neqo/nss-3.111/dist/Debug/lib nohup taskset -c 46,47 /home/john/quic-fuzz/newest/neqo/target/release/neqo-server -d /home/john/quic-fuzz/newest/neqo/test-fixture/db 0.0.0.0:32440 >> neqo.txt  2>&1 & 
