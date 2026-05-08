@@ -40,7 +40,7 @@ struct Opt {
     #[arg(long, default_value = "info")]
     log: String,
 
-    #[arg(long, default_value = "/media/john/Data/key.log")]
+    #[arg(long, default_value = "key.log")]
     sslkeylogfile: String,
 
     #[arg(long, default_value = "pcaps")]

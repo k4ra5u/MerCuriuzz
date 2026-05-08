@@ -228,7 +228,7 @@ static mut SHMEM_QUIC_STRUCT_SECOND: Option<UnixShMem> = None;
 static mut SHMEM_OB_RESPONSE_FIRST: Option<UnixShMem> = None;
 static mut SHMEM_OB_RESPONSE_SECOND: Option<UnixShMem> = None;
 
-const keylog_file: &str = "/media/john/Data/key.log";
+const keylog_file: &str = "key.log";
 const start_dir: &str = "start";
 const judge_dir: &str = "judge";
 

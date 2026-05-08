@@ -226,7 +226,7 @@ pub fn main() {
     std::env::set_var("RUST_LOG", "info");
     std::env::set_var("START_DIR", "start");
     std::env::set_var("JUDGE_DIR", "judge");
-    std::env::set_var("SSLKEYLOGFILE", "/media/john/Data/key.log");
+    std::env::set_var("SSLKEYLOGFILE", "key.log");
     std::env::set_var("PCAPS_DIR", "pcaps");
     configure_h3_runtime_defaults();
     env_logger::init();

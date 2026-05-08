@@ -207,7 +207,7 @@ pub fn main() {
     std::env::set_var("RUST_LOG", "warn");
     std::env::set_var("START_DIR", "start");
     std::env::set_var("JUDGE_DIR", "judge");
-    std::env::set_var("SSLKEYLOGFILE", "/media/john/Data/key.log");
+    std::env::set_var("SSLKEYLOGFILE", "key.log");
     std::env::set_var("PCAPS_DIR", "pcaps");
     env_logger::init();
     let opt = Opt::parse();

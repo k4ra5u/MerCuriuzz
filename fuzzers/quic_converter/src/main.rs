@@ -115,7 +115,7 @@ struct ShmData {
 }
 
 pub fn main() {
-    std::env::set_var("SSLKEYLOGFILE", "/media/john/Data/key.log");
+    std::env::set_var("SSLKEYLOGFILE", "key.log");
     std::env::set_var("RUST_LOG", "info");
     let opt = Opt::parse();
     // 根据传输类型初始化不同资源

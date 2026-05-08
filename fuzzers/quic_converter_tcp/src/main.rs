@@ -380,7 +380,7 @@ fn process_quic_input(rand_seed: u32, input_struct: InputStruct, opt: &Opt) {
 }
 
 pub fn main() {
-    // std::env::set_var("SSLKEYLOGFILE", "/media/john/Data/key.log");
+    // std::env::set_var("SSLKEYLOGFILE", "key.log");
     let opt = Opt::parse();
     // 根据传输类型初始化不同资源
     let mut shm_data = if opt.transport == "shm" {

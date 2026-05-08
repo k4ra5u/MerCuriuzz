@@ -31,7 +31,7 @@ struct Opt {
 
 pub fn main() {
     unsafe { std::env::set_var("RUST_LOG", "info") };
-    unsafe { std::env::set_var("SSLKEYLOGFILE", "/media/john/Data/key.log") };
+    unsafe { std::env::set_var("SSLKEYLOGFILE", "key.log") };
     unsafe { std::env::set_var("PCAPS_DIR", "pcaps") };
     env_logger::init();
     let opt = Opt::parse();

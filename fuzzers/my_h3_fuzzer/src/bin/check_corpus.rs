@@ -116,7 +116,7 @@ fn init_runtime_env() -> Result<(), Box<dyn std::error::Error>> {
     env::set_var("PCAPS_DIR", "pcaps");
     configure_h3_runtime_defaults();
     if env::var_os("SSLKEYLOGFILE").is_none() {
-        env::set_var("SSLKEYLOGFILE", "/media/john/Data/key.log");
+        env::set_var("SSLKEYLOGFILE", "key.log");
     }
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .try_init();
