@@ -90,7 +90,6 @@ corpus*
 *.txt
 *.core
 vendors/fuzzing_targets
-vendors/libafl_nyx
 slog
 *.bak
 *.crt
