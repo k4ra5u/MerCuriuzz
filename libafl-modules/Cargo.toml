@@ -5,10 +5,14 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+default = []
+nyx = ["dep:libafl_nyx"]
+
 [dependencies]
 libafl = {path = "../vendors/LibAFL/libafl" }
 libafl_bolts = {path = "../vendors/LibAFL/libafl_bolts" }
-libafl_nyx = { path = "../vendors/libafl_nyx" }
+libafl_nyx = { path = "../vendors/libafl_nyx", optional = true }
 libafl_targets = { path = "../vendors/LibAFL/libafl_targets"}
 nix = { version = "0.29" }
 regex = { version = "1", optional = true }

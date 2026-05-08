@@ -7,7 +7,9 @@ pub use network_quic_executor::*;
 pub mod quic_executor;
 pub use quic_executor::*;
 
+#[cfg(feature = "nyx")]
 pub mod nyx_quic_executor;
+#[cfg(feature = "nyx")]
 pub use nyx_quic_executor::*;
 
 pub mod h3_executor;
