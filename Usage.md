@@ -8,7 +8,8 @@ sudo apt install -y build-essential pkg-config openssl libssl-dev zlib1g-dev gyp
 
 sudo apt install -y curl git net-tools htop
 
-sudo apt install -y gcc-multilib g++-multilib cmake make python3-pip llvm-dev libclang-dev clang ninja-build
+sudo apt install -y gcc-multilib g++-multilib cmake make python3-pip ninja-build clang-18 llvm-18-dev libclang-18-dev
+
 
 pip install wsproto starlette --break-system-packages
 ```
