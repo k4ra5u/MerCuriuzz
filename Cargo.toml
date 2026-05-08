@@ -30,6 +30,7 @@ default-members = [
     "vendors/LibAFL/libafl_cc",
     "vendors/LibAFL/libafl_derive",
     "vendors/LibAFL/libafl_targets",
+    "fuzzers/non_nyx_quic_fuzz",
 ]
 exclude = [
     "vendors/libafl_nyx",

@@ -18,11 +18,17 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source $HOME/.cargo/env
 rustc --version && cargo --version  
 ```
+if cargo version is not `rustc 1.91.1 (ed61e7d7e 2025-11-07)`:
+```
+rustup toolchain install 1.91.1
+rustup override set 1.91.1
+``` 
 
 
 ## Target Installation
 ```bash
-cd ~/MerCuriuzz/vendors/app_deploy
+cd ~/MerCuriuzz/vendors/
+mkdir -p app_deploy && cd app_deploy
 mkdir -p certs && cd certs
 openssl req -x509 -newkey rsa:4096 -nodes -keyout server.key -out server.crt -days 365 -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
 ```
@@ -138,7 +144,7 @@ export RUSTFLAGS="-C link-arg=-lstdc++"
 CARGO_TARGET_DIR=target  cargo build
 ```
 Usage:
-Before testing, you need to configure the startup parameters and judgment parameters of the two QUIC implementations, which are located in the start and judge directories of the main program project. You need to replace the parameters of the original `<program_name>.sh` file with the program path of the local machine, and modify the content of the ports file in the start directory, which describes the CPU resources and port information used by each QUIC implementation. 
+Before testing, you need to configure the startup parameters and judgment parameters of the two QUIC implementations, which are located in the start and judge directories of the main program project. You need to replace the parameters of the original `<program_name>.sh` file with the program path of the local machine, and modify the content of the `ports` file in the start directory, which describes the CPU resources and port information used by each QUIC implementation.
 
 Run:`target/debug/network_quic_fuzz <procA> <procB>`
 
