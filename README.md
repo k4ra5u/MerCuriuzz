@@ -15,7 +15,12 @@ This framework is based on our latest research,"Identifying Logical Vulnerabilit
 If you want to cite us, please use the following (BibTeX) reference:
 
 ```
-TBA
+@inproceedings{Wang2026identifying,
+  title={{Identifying Logical Vulnerabilities in QUIC Implementations}},
+  author={Wang, Kaihua and Chen, Jianjun and Chen, Pinji and Zhuge, Jianwei and Bai, Jiaju and Duan, Haixin},
+  booktitle={Proceedings 2026 Network and Distributed System Security Symposium},
+  year={2026}
+}
 ```
 We have also uploaded our artifacts to a DOI-providing platform. Here is our DOI link: `https://doi.org/10.5281/zenodo.17015304`
 
